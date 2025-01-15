@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<meta http-equiv="pragma" content="no-cache" />
+<meta http-equiv="expires" content="-1" />
+<meta name="viewport" content="width=device-width; initial-scale=1.0; maximum-scale=1.0;"/>
+<title>Uzanet Hotspot Login</title>
+<link rel="stylesheet" href="http://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" />
+<style type="text/css">
+    body {
+        font-family: Arial, sans-serif;
+        background-color: #f4f4f9;
+        color: #333;
+        margin: 0;
+        padding: 0;
+    }
+    .container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        margin-top: 3%;
+    }
+    .title {
+        font-size: 24px;
+        font-weight: bold;
+        margin-bottom: 10px;
+        text-align: center;
+    }
+    .separator {
+        width: 80%;
+        height: 2px;
+        background-color: #ddd;
+        margin: 20px 0;
+    }
+    .card-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 15px;
+        justify-content: center;
+        margin-bottom: 20px;
+    }
+    .card {
+        width: 150px;
+        height: 120px;
+        background: #fff;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        cursor: pointer;
+        transition: transform 0.2s ease-in-out;
+    }
+    .card:hover {
+        transform: translateY(-5px);
+    }
+    .card h3 {
+        font-size: 16px;
+        margin: 5px 0 0;
+        color: #333;
+    }
+    .card p {
+        font-size: 14px;
+        color: #666;
+    }
+    .card i {
+        font-size: 28px;
+        color: #007bff;
+        margin-bottom: 5px;
+    }
+    .login-form {
+        background: #fff;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        width: 300px;
+        text-align: center;
+    }
+    .login-form-title {
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 15px;
+    }
+    .form-group {
+        position: relative;
+        margin-bottom: 15px;
+    }
+    .form-group input {
+        width: calc(100% - 40px);
+        padding: 10px;
+        padding-left: 35px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        font-size: 14px;
+    }
+    .form-group label {
+        font-size: 14px;
+        margin-bottom: 5px;
+        display: block;
+        text-align: left;
+        color: #555;
+    }
+    .form-group {
+  position: relative;
+}
+
+.input-icon {
+  position: absolute;
+  top: 70%;
+  left: 10px;
+  transform: translateY(-50%);
+  width: 20px; /* Adjust icon size */
+  height: 20px; /* Adjust icon size */
+  pointer-events: none; /* Prevent the icon from blocking input clicks */
+}
+
+input {
+  padding-left: 40px; /* Add space to accommodate the icon */
+}
+
+    .form-group i {
+        position: absolute;
+        left: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: #888;
+    }
+    .login-form input[type="submit"] {
+        background-color: #007bff;
+        color: #fff;
+        border: none;
+        border-radius: 5px;
+        padding: 10px 20px;
+        font-size: 14px;
+        cursor: pointer;
+        width: 100%;
+    }
+    .login-form input[type="submit"]:hover {
+        background-color: #0056b3;
+    }
+    .popup-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.5);
+        display: none;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+    }
+    .popup {
+        background: #fff;
+        padding: 20px;
+        border-radius: 8px;
+        text-align: center;
+        width: 300px;
+    }
+    .popup h2 {
+        margin-bottom: 15px;
+    }
+    .popup input[type="text"] {
+        width: calc(100% - 20px);
+        padding: 10px;
+        margin-bottom: 15px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        font-size: 14px;
+    }
+    .popup button {
+        background-color: #007bff;
+        color: #fff;
+        border: none;
+        border-radius: 5px;
+        padding: 10px 20px;
+        font-size: 14px;
+        cursor: pointer;
+    }
+    .popup button:hover {
+        background-color: #0056b3;
+    }
+    .loader {
+        display: none;
+        margin: 20px auto;
+    }
+    .loader div {
+        width: 16px;
+        height: 16px;
+        margin: 4px;
+        background-color: #007bff;
+        border-radius: 50%;
+        display: inline-block;
+        animation: loader-bounce 1.2s infinite ease-in-out;
+    }
+    @keyframes loader-bounce {
+        0%, 80%, 100% {
+            transform: scale(0);
+        }
+        40% {
+            transform: scale(1);
+        }
+    }
+</style>
+</head>
+<body>
+<div class="container">
+    <div class="title">Uzanet Hotspot</div>
+    <div class="login-form-title">1.Choose option to pay with Mpesa</div>
+
+    <div class="card-container">
+        <div class="card" onclick="showPopup('10 KSh for 1 Hour')">
+            <img src="./assets/1hour.png" alt="1 Hour" style="width: 30px; height: 30px;" />
+
+            <h3>1 Hour</h3>
+             <h3>@</h3>
+
+            <p>10 KSh</p>
+        </div>
+        <div class="card" onclick="showPopup('50 KSh for 1 Day')">
+            <img src="./assets/calendar.png" alt="1 Hour" style="width: 30px; height: 30px;" />
+            <h3>1 Day</h3>
+              <h3>@</h3>
+
+            <p>50 KSh</p>
+        </div>
+        <div class="card" onclick="showPopup('150 KSh for 3 Days')">
+            <img src="./assets/days.png" alt="1 Hour" style="width: 30px; height: 30px;" />
+            <h3>3 Days</h3>
+             <h3>@</h3>
+
+            <p>150 KSh</p>
+        </div>
+        <div class="card" onclick="showPopup('300 KSh for 7 Days')">
+            <img src="./assets/week.png" alt="1 Hour" style="width: 30px; height: 30px;" />
+            <h3>7 Days</h3>
+             <h3>@</h3>
+
+            <p>300 KSh</p>
+        </div>
+        <div class="card" onclick="showPopup('1000 KSh for 1 Month')">
+            <img src="./assets/30-days.png" alt="1 Hour" style="width: 30px; height: 30px;" />
+            <h3>1 Month</h3>
+            <h3>@<h3>
+
+            <p>1000 KSh</p>
+        </div>
+    </div>
+    <div class="separator"></div>
+    <div class="login-form">
+        <div class="login-form-title">2. Or login with ticket</div>
+        <form name="login" action="$(link-login-only)" method="post" $(if chap-id) onSubmit="return doLogin()" $(endif)>
+            <div class="form-group">
+                <label for="username">Username</label>
+                <img src="assets/man.png" alt="User Icon" class="input-icon" />
+
+                <input type="text" id="username" name="username" placeholder="Enter your username" />
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <img src="assets/password.png" alt="User password" class="input-icon" />
+                <input type="password" id="password" name="password" placeholder="Enter your password" />
+            </div>
+            <input type="submit" value="Log In" />
+        </form>
+    </div>
+</div>
+
+<div class="popup-overlay" id="popup-overlay">
+    <div class="popup">
+        <h2 id="popup-title">Enter Your Phone Number</h2>
+        <input type="text" id="phone-number" placeholder="Phone Number" />
+        <button onclick="simulateLoader()">Submit</button>
+        <div class="loader" id="loader">
+            <div></div><div></div><div></div>
+        </div>
+    </div>
+</div>
+
+<script type="text/javascript" src="/md5.js"></script>
+<script type="text/javascript">
+    function doLogin() {
+        document.sendin.username.value = document.login.username.value;
+        document.sendin.password.value = hexMD5('$(chap-id)' + document.login.password.value + '$(chap-challenge)');
+        document.sendin.submit();
+        return false;
+    }
+
+    function showPopup(title) {
+        document.getElementById('popup-title').textContent = title;
+        document.getElementById('popup-overlay').style.display = 'flex';
+    }
+
+    function simulateLoader() {
+    const phoneNumber = document.getElementById('phone-number').value;
+
+    if (!phoneNumber) {
+        alert("Please enter your phone number.");
+        return;
+    }
+
+    document.getElementById('loader').style.display = 'block';
+
+    // Define the payload to send to the backend
+    const payload = {
+        phone_number: phoneNumber
+    };
+
+    // Send the POST request
+    fetch("http://192.168.88.252:8000/stkpush/initiate", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+    })
+        .then(response => {
+            document.getElementById('loader').style.display = 'none';
+            if (response.ok) {
+                return response.json(); // Parse JSON response
+            } else {
+                throw new Error("Failed to initiate STK Push");
+            }
+        })
+        .then(data => {
+            // Handle the success response
+            alert("Request initiated successfully! Transaction ID: " + data.transaction_id);
+            closePopup();
+        })
+        .catch(error => {
+            // Handle any errors
+            document.getElementById('loader').style.display = 'none';
+            alert("Error: " + error.message);
+        });
+}
+
+function closePopup() {
+    document.getElementById('popup-overlay').style.display = 'none';
+}
+
+
+    document.login.username.focus();
+</script>
+</body>
+</html>
