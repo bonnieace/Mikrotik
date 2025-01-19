@@ -9,6 +9,7 @@ import time
 
 app = FastAPI()
 # Mount the hotspot directory to serve static files
+
 app.mount("/hotspot", StaticFiles(directory="hotspot"), name="hotspot")
 origins = [
     "*",  # Replace with the origin of your frontend
@@ -50,11 +51,10 @@ async def serve_redirect_html():
     """
     Serve the HTML file located at hotspot/redirect/index.html.
     """
-    file_path = "hotspot/hotspot/index.html"
+    file_path = "hotspot/redirect/login.html"
     return FileResponse(file_path)
 @app.post("/stkpush/initiate")
-#async def initiate_stk_push(phone_number: str, amount: int, background_tasks: BackgroundTasks):
-async def initiate_stk_push( background_tasks: BackgroundTasks):
+async def initiate_stk_push(phone_number: str, amount: int, background_tasks: BackgroundTasks):
 
     # Generate OAuth token
     auth_url = f"{BASE_URL}/oauth/v1/generate?grant_type=client_credentials"

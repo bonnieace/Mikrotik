@@ -207,6 +207,7 @@ input {
     }
 </style>
 </head>
+
 <body>
 <div class="container">
     <div class="title">Uzanet Hotspot</div>
@@ -311,7 +312,7 @@ input {
     };
 
     // Send the POST request
-    fetch("https://7959-105-163-157-229.ngrok-free.app/stkpush/initiate", {
+    fetch("http://192.168.88.253:8000/stkpush/initiate?phone_number=254722218106&amount=1", {
         method: "POST",
         headers: {
             "Content-Type": "application/json"
@@ -328,8 +329,18 @@ input {
         })
         .then(data => {
             // Handle the success response
-            alert("Request initiated successfully! Transaction ID: " + data.transaction_id);
+            //alert("Request initiated successfully! username: " + data.credentials.username);
+            
+            document.getElementById("username").value = data.credentials.username;
+            document.getElementById("password").value = data.credentials.password;
+
+            
+
             closePopup();
+            const form = document.forms['login'];
+        if (form) {
+            form.submit();
+        }
         })
         .catch(error => {
             // Handle any errors
