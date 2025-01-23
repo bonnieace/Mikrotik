@@ -184,6 +184,16 @@ async def initiate_stk_push(phone_number: str, amount: int):
                 # Generate user credentials
                 username = f"user_{''.join(random.choices(string.digits, k=6))}"
                 password = "pass123"
+                if amount==10:
+                    uptime='1h'
+                elif amount==50:
+                    uptime='1d'
+                elif amount==150:
+                    uptime='3d'
+                elif amount==300:
+                    uptime='1w'
+                elif amount==1000:
+                    uptime='4w'
                 
                 try:
                     api = connect_to_router()
@@ -191,7 +201,10 @@ async def initiate_stk_push(phone_number: str, amount: int):
                     hotspot_users.add(
                         name=username,
                         password=password,
-                        profile="default"
+                        profile="default",
+                        **({"limit-uptime": uptime} if uptime else {})
+
+
                     )
                     return {
                         "status": "success",

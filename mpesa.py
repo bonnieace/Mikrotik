@@ -53,9 +53,9 @@ async def serve_redirect_html():
     """
     file_path = "hotspot/redirect/login.html"
     return FileResponse(file_path)
-@app.post("/stkpush/initiate")
-async def initiate_stk_push(phone_number: str, amount: int, background_tasks: BackgroundTasks):
 
+@app.post("/stkpush/initiate")
+async def initiate_stk_push(phone_number: str, amount: int):
     # Generate OAuth token
     auth_url = f"{BASE_URL}/oauth/v1/generate?grant_type=client_credentials"
     async with httpx.AsyncClient() as client:
@@ -72,61 +72,56 @@ async def initiate_stk_push(phone_number: str, amount: int, background_tasks: Ba
     stk_url = f"{BASE_URL}/mpesa/stkpush/v1/processrequest"
     headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
     timestamp = time.strftime("%Y%m%d%H%M%S")
-    password = "MTc0Mzc5YmZiMjc5TliZGJjZjE1OGU5N2RkNzFhNDY3Y2QyZTBjODkzMDU5YjEwZjc4ZTZiNzJhZGExZWQyYzkxOTIwMTYwMjE2MTY1NjI3"  # Add the encoded password for the STK push
     payload = {
-        
         "BusinessShortCode": "174379",    
-        "Password":"MTc0Mzc5YmZiMjc5ZjlhYTliZGJjZjE1OGU5N2RkNzFhNDY3Y2QyZTBjODkzMDU5YjEwZjc4ZTZiNzJhZGExZWQyYzkxOTIwMTYwMjE2MTY1NjI3",    
-        "Timestamp":"20160216165627",    
+        "Password": "MTc0Mzc5YmZiMjc5ZjlhYTliZGJjZjE1OGU5N2RkNzFhNDY3Y2QyZTBjODkzMDU5YjEwZjc4ZTZiNzJhZGExZWQyYzkxOTIwMTYwMjE2MTY1NjI3",    
+        "Timestamp": "20160216165627",    
         "TransactionType": "CustomerPayBillOnline",    
-        "Amount": "1",    
-        "PartyA":"254722218106",    
-        "PartyB":"174379",    
-        "PhoneNumber":"254722218106",    
+        "Amount": str(amount),    
+        "PartyA": phone_number,    
+        "PartyB": "174379",    
+        "PhoneNumber": phone_number,    
         "CallBackURL": "https://fb43-105-163-157-64.ngrok-free.app/callback",    
-        "AccountReference":"Test",    
-        "TransactionDesc":"Test"
+        "AccountReference": "Test",    
+        "TransactionDesc": "Test"
     }
 
     async with httpx.AsyncClient() as client:
         stk_response = await client.post(stk_url, json=payload, headers=headers)
 
     if stk_response.status_code != 200:
-        error_detail = stk_response.json()  # Log the detailed error response
-        print("STK Push failed:", error_detail)  # Log the response for further inspection
+        error_detail = stk_response.json()
+        print("STK Push failed:", error_detail)
         raise HTTPException(status_code=stk_response.status_code, detail="STK push failed")
 
     response_data = stk_response.json()
-
     checkout_request_id = response_data.get("CheckoutRequestID")
     
     if not checkout_request_id:
         raise HTTPException(status_code=500, detail="Missing CheckoutRequestID in response")
-    
-    # Schedule payment status check
-    background_tasks.add_task(check_payment_status, checkout_request_id, access_token)
-    return {"message": "STK Push initiated", "CheckoutRequestID": checkout_request_id}
 
-async def check_payment_status(checkout_request_id: str, access_token: str):
-    time.sleep(15)  # Wait for a reasonable time before checking payment status
-    query_url = f"{BASE_URL}/mpesa/stkpushquery/v1/query"
-    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-    timestamp = time.strftime("%Y%m%d%H%M%S")
-    password = "MTc0Mzc5Ym..."  # Add the encoded password for the query
-    payload = {
-        "BusinessShortCode": "174379",    
-        "Password":"MTc0Mzc5YmZiMjc5ZjlhYTliZGJjZjE1OGU5N2RkNzFhNDY3Y2QyZTBjODkzMDU5YjEwZjc4ZTZiNzJhZGExZWQyYzkxOTIwMTYwMjE2MTY1NjI3",    
-        "Timestamp":"20160216165627",
-        "CheckoutRequestID": "ws_CO_14012025184425933722218106"
-    }
+    # Wait and check payment status multiple times
+    max_attempts = 6  # Will try 6 times over 60 seconds
+    for attempt in range(max_attempts):
+        await asyncio.sleep(10)  # Wait 10 seconds between checks
+        
+        query_url = f"{BASE_URL}/mpesa/stkpushquery/v1/query"
+        headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+        timestamp = time.strftime("%Y%m%d%H%M%S")
+        query_payload = {
+            "BusinessShortCode": "174379",    
+            "Password": "MTc0Mzc5YmZiMjc5ZjlhYTliZGJjZjE1OGU5N2RkNzFhNDY3Y2QyZTBjODkzMDU5YjEwZjc4ZTZiNzJhZGExZWQyYzkxOTIwMTYwMjE2MTY1NjI3",    
+            "Timestamp": "20160216165627",
+            "CheckoutRequestID": checkout_request_id
+        }
 
-    async with httpx.AsyncClient() as client:
-        query_response = await client.post(query_url, json=payload, headers=headers)
-    
-    if query_response.status_code == 200:
-        # Log or process the payment status
-        if query_response.json().get("ResultCode")=="1037":
-            print("Payment made successfully")
-    else:
-        print("Failed to check payment status")
-
+        async with httpx.AsyncClient() as client:
+            query_response = await client.post(query_url, json=query_payload, headers=headers)
+        
+        if query_response.status_code == 200:
+            response_data = query_response.json()
+            result_code = response_data.get("ResultCode")
+            
+            if result_code == "0":  # Successful payment
+                print("Payment successful:", response_data)
+                return {"status": "success", "data": response_data}
