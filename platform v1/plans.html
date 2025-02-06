@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+
+    <title>Plans - UzaNet</title>
+    <link rel="stylesheet" href="styles.css"> 
+    <script src="index.js"></script>  
+</head>
+<body>
+    <div class="dashboard">
+        
+        <!-- Sidebar -->
+        <div class="sidebar" id="sidebar">
+            <div class="logo">
+                <h1><i class="fas fa-chart-line"></i> <span>UzaNet</span></h1>
+            </div>
+            <nav>
+                <ul>
+                    <li><a href="dashboard.html" ><i class="fas fa-home"></i> <span>Dashboard</span></a></li>
+                    <li><a href="clients.html"><i class="fas fa-users"></i> <span>PPPoE</span></a></li>
+                    <li><a href="hotspot.html" ><i class="fas fa-wifi"></i> <span>Hotspot</span></a></li>
+
+                    <li><a href="#"class="active"><i class="fas fa-list-alt"></i> <span>Plans</span></a></li>
+                    <li><a href="reports.html"><i class="fas fa-chart-bar"></i> <span>Reports</span></a></li>
+                    <li><a href="settings.html"><i class="fas fa-cog"></i> <span>Settings</span></a></li>
+                </ul>
+            </nav>
+        </div>
+
+
+        <!-- Main Content -->
+        <div class="main-content">
+                        <!-- Header -->
+                        <header>
+                            <div class="header-left">
+                                <div class="mobile-menu-toggle">
+                                    <i class="fas fa-bars"></i>
+                                </div>
+                                <h2>Plans</h2>
+                            </div>
+                            <div class="header-right">
+                                <div class="theme-toggle" id="theme-toggle">
+                                    <i class="fas fa-moon"></i> <!-- Default to moon (dark theme) -->
+                                </div>
+                                <div class="user-profile">
+                                    <span> Admin</span>
+                                    <img src="user.png" alt="Profile">
+                                </div>
+                            </div>
+                        </header>
+                         <!-- Mobile Dropdown Menu -->
+                         <div class="mobile-dropdown">
+                            <a href="dashboard.html" ><i class="fas fa-home"></i> Dashboard</a>
+                            <a href="clients.html"><i class="fas fa-users"></i> Clients</a>
+                            <a href="#" class="active"><i class="fas fa-list-alt"></i> Plans</a>
+                            <a href="reports.html"><i class="fas fa-chart-bar"></i> Reports</a>
+                            <a href="settings.html"><i class="fas fa-cog"></i> Settings</a>
+                        </div>
+
+            <!-- Content Area -->
+            <div class="content">
+                <div class="tables">
+                    <h3>Plan List</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Plan</th>
+                                <th>Service Type</th>
+                                <th>Amount (KES)</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>1 Week</td>
+                                <td>Hotspot</td>
+                                <td>500</td>
+                                <td>Active</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // JavaScript for Plans
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add plan-specific JavaScript here
+        });
+    </script>
+</body>
+</html>

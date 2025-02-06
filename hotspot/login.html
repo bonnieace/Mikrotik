@@ -343,11 +343,11 @@ if (phoneNumber.startsWith('0')) {
         alert("Phone numbers starting with '0' must have 10 digits.");
         return;
     }
-    // Remove the leading 0 and add +254
+    // Remove the leading 0 and add 254
     processedPhoneNumber = '254' + phoneNumber.slice(1);
 } else if (phoneNumber.startsWith('254')) {
-    // Ensure it has 13 digits (including +254)
-    if (phoneNumber.length !== 13) {
+    // Ensure it has 12 digits (including 254)
+    if (phoneNumber.length !== 12) {
         alert("Phone numbers starting with '254' must have 13 digits.");
         return;
     }

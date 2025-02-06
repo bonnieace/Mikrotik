@@ -3,3 +3,4 @@ uvicorn[standard]
 librouteros
 pydantic
 python-dotenv
+httpx

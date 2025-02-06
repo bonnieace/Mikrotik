@@ -1,11 +1,13 @@
 import os
 import africastalking
+from dotenv import load_dotenv
+import os
 
 # TODO: Initialize Africa's Talking
-
+load_dotenv()
 africastalking.initialize(
-    username='sandbox',
-    api_key='atsk_1156c81b10246f8a6f6f0bff36587d069ca629374a706db0b4ca5e2cfd29b86d76b2dc77'
+    username=os.getenv('AFRICASTALKING_USERNAME'),
+    api_key=os.getenv('AFRICASTALKING_API_KEY')
 )
 
 sms = africastalking.SMS
@@ -25,7 +27,7 @@ def sending():
         response = sms.send(message, recipients, sender)
         print (response)
     except Exception as e:
-        print (f'Houston, we have a problem: {e}')
+        print (f' we have a problem: {e}')
 sending()
 
     

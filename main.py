@@ -135,7 +135,7 @@ async def initiate_stk_push(phone_number: str, amount: int):
         "Password": "MTc0Mzc5YmZiMjc5ZjlhYTliZGJjZjE1OGU5N2RkNzFhNDY3Y2QyZTBjODkzMDU5YjEwZjc4ZTZiNzJhZGExZWQyYzkxOTIwMTYwMjE2MTY1NjI3",    
         "Timestamp": "20160216165627",    
         "TransactionType": "CustomerPayBillOnline",    
-        "Amount": str(amount),    
+        "Amount": "1",    
         "PartyA": phone_number,    
         "PartyB": "174379",    
         "PhoneNumber": phone_number,    
@@ -184,7 +184,7 @@ async def initiate_stk_push(phone_number: str, amount: int):
                 # Generate user credentials
                 username = f"user_{''.join(random.choices(string.digits, k=6))}"
                 password = "pass123"
-                if amount==10:
+                if amount==1:
                     uptime='1h'
                 elif amount==50:
                     uptime='1d'
@@ -300,6 +300,17 @@ def get_hotspot_users():
     except TrapError as e:
         raise HTTPException(status_code=400, detail=f"Error retrieving users: {str(e)}")
 
+@app.get("/hotspot-active-users")
+def get_hotspot_active_users():
+    api = connect_to_router()
+    hotspot_users = api.path("ip", "hotspot","active")
+
+    try:
+        return {"users": list(hotspot_users)}
+    except TrapError as e:
+        raise HTTPException(status_code=400, detail=f"Error retrieving users: {str(e)}")
+
+
 @app.post("/hotspot-users")
 def add_hotspot_user(user: HotspotUserRequest):
     api = connect_to_router()
@@ -317,7 +328,7 @@ def add_hotspot_user(user: HotspotUserRequest):
     except TrapError as e:
         raise HTTPException(status_code=400, detail=f"Error creating user: {str(e)}")
 
-@app.delete("/hotspot-users/{username}")
+@app.post("/hotspot-users/{username}")
 def delete_hotspot_user(username: str):
     api = connect_to_router()
     hotspot_users = api.path("ip", "hotspot", "user")
@@ -325,6 +336,8 @@ def delete_hotspot_user(username: str):
     try:
         # Find the user by username
         users = list(hotspot_users)
+        print(users)
+
         user = next((u for u in users if u['name'] == username), None)
 
         if user is None:
@@ -334,9 +347,43 @@ def delete_hotspot_user(username: str):
         return {"message": "Hotspot user deleted successfully"}
     except TrapError as e:
         raise HTTPException(status_code=400, detail=f"Error deleting user: {str(e)}")
-    
 
-@app.delete("/hotspot/logout")
+
+
+@app.post("/hotspot-users/{username}/kickout")
+def kickout_hotspot_user(username: str):
+    api = connect_to_router()
+    hotspot_users = api.path("ip", "hotspot", "user")
+    hotspot_active = api.path("ip", "hotspot", "active")
+
+    try:
+        # Step 1: Find and disable the user
+        users = list(hotspot_users)
+        user = next((u for u in users if u['name'] == username), None)
+
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Correct usage of update method
+        hotspot_users.update(disabled="yes", **{".id": user[".id"]})
+
+        # Step 2: Remove the user's active session (if they are active)
+        active_sessions = list(hotspot_active)
+        active_user = next((a for a in active_sessions if a['user'] == username), None)
+
+        if active_user:
+            hotspot_active.remove(active_user[".id"])
+
+        return {
+            "message": f"Hotspot user '{username}' has been disabled and logged out successfully"
+        }
+    except TrapError as e:
+        raise HTTPException(status_code=400, detail=f"Error disabling or logging out user: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+@app.post("/hotspot/logout")
 def logout_device(mac_address: str = None, ip_address: str = None):
     api = connect_to_router()
     hotspot_active = api.path("ip", "hotspot", "active")
