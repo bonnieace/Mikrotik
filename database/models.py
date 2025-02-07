@@ -53,3 +53,21 @@ class Package(Base):
     validity_days = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class PPPUser(Base):
+    __tablename__ = "ppp_users"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(125), nullable=False)
+    email = Column(String(125), unique=True, nullable=False)
+    pppoe_username = Column(String(125), unique=True, nullable=False)
+    pppoe_password = Column(String(125), nullable=False)
+    mobile_number = Column(String(20), nullable=False)
+    profile = Column(Text, nullable=True)
+    expires_on = Column(DateTime, nullable=True)
+    location = Column(String(125), nullable=True)
+    apartment = Column(String(125), nullable=True)
+    package_id = Column(Integer, ForeignKey("packages.id"), nullable=True)
+    role = Column(String(125), nullable=False, default="ppp_user")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

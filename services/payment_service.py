@@ -1,4 +1,7 @@
 import time
+
+from fastapi import HTTPException
+from database import crud
 import httpx
 import asyncio
 import random
@@ -6,6 +9,7 @@ import string
 from datetime import datetime, timedelta
 from database.crud import create_hotspot_user, create_payment, create_log
 from database.session import SessionLocal
+from services.mikrotik_service import connect_to_router
 
 # Constants
 BASE_URL = "https://sandbox.safaricom.co.ke"
@@ -14,6 +18,8 @@ CONSUMER_SECRET = "ouz2P5YwOAKoRBnyJj8UVAIS8fZhqALYTM5NrUDG0Pu5Y5L8KdYw8z0TcFzdI
 
 async def initiate_stk_push(phone_number: str, amount: int):
     db = SessionLocal()
+    api = connect_to_router()
+
 
     try:
         # Generate OAuth token
@@ -99,6 +105,24 @@ async def initiate_stk_push(phone_number: str, amount: int):
                         uptime = '4w'
                     else:
                         uptime = None
+
+                    #add user to mikrotik use try catch with logging
+                    try:
+                        
+                        hotspot_users = api.path("ip", "hotspot", "user")
+                        hotspot_users.add(
+                            name=username,
+                            password=password,
+                            profile="default",
+                            **({"limit-uptime": uptime} if uptime else {})
+
+                        )
+                    except Exception as e:
+                        create_log(db, description=f"Failed to add hotspot user {username} to MikroTik: {str(e)}", phone_number=phone_number)
+                        raise HTTPException(status_code=400, detail=str(e))
+                    
+                    
+                    
                     
                     # Create hotspot user
                     hotspot_user = create_hotspot_user(db, phone_number=phone_number, amount=amount,otp=username)
@@ -126,3 +150,52 @@ async def initiate_stk_push(phone_number: str, amount: int):
                 raise Exception("Payment timeout - please try again or check your M-PESA for any completed transaction")
     finally:
         db.close()
+
+#read all payments service
+def get_payments():
+    db = SessionLocal()
+    try:
+        payments = crud.get_payments(db)
+        payment_list = []
+        for payment in payments:
+            payment_list.append({
+                "invoice": payment.invoice,
+                "amount": payment.amount,
+                "user_type": payment.user_type,
+                "user_id": payment.user_id
+            })
+        return payment_list
+    except Exception as e:
+        crud.create_log(db, description=f"Failed to get payments: {str(e)}", phone_number=None)
+        raise HTTPException(status_code=400, detail=str(e))
+    
+#read payments by user type service
+def get_payments_by_user_type(user_type: str):
+    db = SessionLocal()
+    try:
+        payments = crud.get_payments_by_user_type(db, user_type)
+        payment_list = []
+        for payment in payments:
+            payment_list.append({
+                "invoice": payment.invoice,
+                "amount": payment.amount,
+                "user_type": payment.user_type,
+                "user_id": payment.user_id
+            })
+        return payment_list
+    except Exception as e:
+        crud.create_log(db, description=f"Failed to get payments: {str(e)}", phone_number=None)
+        raise HTTPException(status_code=400, detail=str(e))
+    
+#return total payment for by user type
+def get_total_payment_by_user_type(user_type: str):
+    db = SessionLocal()
+    try:
+        payments = crud.get_payments_by_user_type(db, user_type)
+        total_payment = 0
+        for payment in payments:
+            total_payment += payment.amount
+        return total_payment
+    except Exception as e:
+        crud.create_log(db, description=f"Failed to get payments: {str(e)}", phone_number=None)
+        raise HTTPException(status_code=400, detail=str(e))
