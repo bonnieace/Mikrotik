@@ -164,18 +164,13 @@
                                 <th>Username</th>
                                 <th>Status</th>
                                 <th>Expiry</th>
-                                <th>Profile</th>
+                                <th>created at</th>
                                 <th>Phone</th>
                             </tr>
                         </thead>
                         <tbody>
                             <tr>
-                                <td data-label="ID">1</td>
-                                <td data-label="Username">Job</td>
-                                <td data-label="Status">Offline</td>
-                                <td data-label="Expiry">27-01-2025 08:58</td>
-                                <td data-label="Profile">10 Mbps</td>
-                                <td data-label="Phone">254777493268</td>
+                              
                             </tr>
                         </tbody>
                     </table>
@@ -231,13 +226,7 @@
         const tableBody = document.querySelector('.tables tbody');
         const newRow = document.createElement('tr');
         newRow.innerHTML = `
-            <td>${tableBody.children.length + 1}</td>
-            <td>${pppoeUsername}</td>
-            
-            <td>Offline</td>
-            <td>${expiry}</td>
-            <td>${profile}</td>
-            <td>${phone}</td>
+           
         `;
         tableBody.appendChild(newRow);
     
@@ -265,6 +254,52 @@
             });
         });
       
+    </script>
+    <script>
+                  //fetch hotspot clients from endpoint
+    const baseUrl = 'http://192.168.88.253:8000'; // Update this as required
+
+// Fetch hotspot users from /hotspot_users endpoint
+async function fetchHotspotUsers() {
+  try {
+    const response = await fetch(`${baseUrl}/ppp_users`);
+    if (!response.ok) {
+      throw new Error(`Error fetching ppp users: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json();
+    console.log('ppp Users:', data);
+    updateTable(data);
+  } catch (error) {
+    console.error('Failed to fetch ppp users:', error);
+  }
+}
+function updateTable(users) {
+    const tableBody = document.querySelector("table tbody");
+    tableBody.innerHTML = ""; // Clear existing rows
+
+    users.forEach((user, index) => {
+      const row = document.createElement("tr");
+      const status = user.expires_on && new Date(user.expires_on) > new Date() ? "Active" : "Expired";
+
+
+      row.innerHTML = `
+        <td data-label="ID">${index + 1}</td>
+        <td data-label="Username">${user.name}</td>
+        <td data-label="Status">${status}</td>
+        <td data-label="Expiry">${user.expires_on || "N/A"}</td>
+        <td data-label="Created">${user.created_at}</td>
+        <td data-label="Phone">${user.mobile_number}</td>
+      `;
+
+      tableBody.appendChild(row);
+    });
+  }
+
+  // Load data when the page is ready
+window.addEventListener('DOMContentLoaded', () => {
+      fetchHotspotUsers();
+    });
+
     </script>
     
 </body>

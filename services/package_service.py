@@ -35,6 +35,7 @@ def get_packages():
         package_list = []
         for package in packages:
             package_list.append({
+                "id" : package.id,
                 "name": package.name,
                 "description": package.description,
                 "price": package.price,

@@ -21,8 +21,10 @@ def get_logs():
         log_list = []
         for log in logs:
             log_list.append({
+                "id":log.id,
                 "description": log.description,
-                "phone_number": log.phone_number
+                "phone_number": log.phone_number,
+                "timestamp":log.timestamp
             })
         return log_list
     except Exception as e:

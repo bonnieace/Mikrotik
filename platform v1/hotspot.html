@@ -163,7 +163,7 @@
                                 <th>Username</th>
                                 <th>Status</th>
                                 <th>Expiry</th>
-                                <th>Profile</th>
+                                <th>Amount</th>
                                 <th>Phone</th>
                             </tr>
                         </thead>
@@ -173,7 +173,7 @@
                                 <td data-label="Username">Job</td>
                                 <td data-label="Status">Offline</td>
                                 <td data-label="Expiry">27-01-2025 08:58</td>
-                                <td data-label="Profile">10 Mbps</td>
+                                <td data-label="Amount">Sh.10</td>
                                 <td data-label="Phone">254777493268</td>
                             </tr>
                         </tbody>
@@ -182,8 +182,56 @@
             </div>
         </div>
     </div>
+    <script>
+          //fetch hotspot clients from endpoint
+    const baseUrl = 'http://192.168.88.253:8000'; // Update this as required
+
+// Fetch hotspot users from /hotspot_users endpoint
+async function fetchHotspotUsers() {
+  try {
+    const response = await fetch(`${baseUrl}/hotspot_users`);
+    if (!response.ok) {
+      throw new Error(`Error fetching hotspot users: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json();
+    console.log('Hotspot Users:', data);
+    updateTable(data);
+  } catch (error) {
+    console.error('Failed to fetch hotspot users:', error);
+  }
+}
+function updateTable(users) {
+    const tableBody = document.querySelector("table tbody");
+    tableBody.innerHTML = ""; // Clear existing rows
+
+    users.forEach((user, index) => {
+      const row = document.createElement("tr");
+      const status = user.expires_at && new Date(user.expires_at) > new Date() ? "Active" : "Expired";
+
+
+      row.innerHTML = `
+        <td data-label="ID">${index + 1}</td>
+        <td data-label="Username">${user.otp}</td>
+        <td data-label="Status">${status}</td>
+        <td data-label="Expiry">${user.expires_at || "N/A"}</td>
+        <td data-label="Amount">Sh.${user.amount}</td>
+        <td data-label="Phone">${user.phone_number}</td>
+      `;
+
+      tableBody.appendChild(row);
+    });
+  }
+
+  // Load data when the page is ready
+window.addEventListener('DOMContentLoaded', () => {
+      fetchHotspotUsers();
+    });
+
+    </script>
 
     <script>// Add Client Modal Functionality
+  
+
        
     // Add Client Modal Functionality
         
@@ -246,23 +294,29 @@
     });
         
                 
-        // Search Functionality
-        const searchInput = document.getElementById('search-input');
-        const searchButton = document.getElementById('search-button');
-        const tableRows = document.querySelectorAll('.tables tbody tr');
-        
-        searchButton.addEventListener('click', () => {
-            const searchTerm = searchInput.value.toLowerCase();
-        
-            tableRows.forEach(row => {
-                const rowText = row.textContent.toLowerCase();
-                if (rowText.includes(searchTerm)) {
-                    row.style.display = '';
-                } else {
-                    row.style.display = 'none';
-                }
-            });
-        });
+    const searchInput = document.getElementById('search-input');
+const tableBody = document.querySelector('.tables tbody'); // Cache the tbody element
+
+function performSearch() {
+    const searchTerm = searchInput.value.toLowerCase();
+    // Get fresh rows reference each time to include dynamically loaded data
+    const rows = tableBody.querySelectorAll('tr');
+
+    rows.forEach(row => {
+        const rowText = row.textContent.toLowerCase();
+        row.style.display = rowText.includes(searchTerm) ? '' : 'none';
+    });
+}
+
+// Search on keystroke with debounce
+let timeoutId;
+searchInput.addEventListener('input', () => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(performSearch, 300);
+});
+
+// Optional: Keep click handler if needed
+searchButton.addEventListener('click', performSearch);
       
     </script>
     

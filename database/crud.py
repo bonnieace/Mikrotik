@@ -54,6 +54,15 @@ def get_payments(db: Session):
 def get_payments_by_user_type(db: Session, user_type: str):
     return db.query(Payment).filter(Payment.user_type == user_type).all()
 
+#read payment totals for the current day by user type
+def get_payment_totals_for_today_by_user_type(db: Session, user_type: str):
+    today = datetime.now().date()
+    payments = db.query(Payment).filter(
+        Payment.user_type == user_type,
+        Payment.created_at >= today
+    ).all()
+    total_amount = sum(payment.amount for payment in payments)
+    return total_amount
 
 #read all logs
 def get_logs(db: Session):
@@ -68,8 +77,8 @@ def get_hotspot_users(db: Session):
     return db.query(HotspotUser).all()
 
 #create ppp user
-def create_ppp_user(db: Session, name: str):
-    db_ppp_user = PPPUser(name=name)
+def create_ppp_user(db: Session, name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str,):
+    db_ppp_user = PPPUser(name=name,email=email,pppoe_password=pppoe_password,mobile_number=mobile_number,location=location,apartment=apartment,profile=profile,pppoe_username=pppoe_username)
     db.add(db_ppp_user)
     db.commit()
     db.refresh(db_ppp_user)

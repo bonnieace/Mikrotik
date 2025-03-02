@@ -39,3 +39,27 @@ def connect_to_router():
         return api
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Connection failed: {str(e)}")
+
+#fetch rx rt data from mikrotik in bridge interface
+def fetch_rt_rx_tx_data():
+    try:
+        api = connect_to_router()  # Assumes a working librouteros connection.
+        # Access the "interface/monitor-traffic" resource.
+        resource = api.path("interface", "monitor-traffic")
+        
+        # Execute the "once" command to get a snapshot for the 'bridge' interface.
+        result = list(resource.call("once", {"interface": "bridge"}))
+        
+        if not result:
+            raise Exception("Empty response from MikroTik API")
+        
+        data = result[0]  # Get the first result (a dict)
+        
+        return {
+            "rx_bits_per_second": data.get("rx-bits-per-second", 0),
+            "tx_bits_per_second": data.get("tx-bits-per-second", 0)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch RT RX/TX data: {str(e)}")
+
+

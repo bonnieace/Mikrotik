@@ -67,10 +67,12 @@
                     <table>
                         <thead>
                             <tr>
+                                <th>Id</th>
                                 <th>Plan</th>
+                                <th>Description</th>
                                 <th>Service Type</th>
-                                <th>Amount (KES)</th>
-                                <th>Status</th>
+                                <th>Price (KES)</th>
+                                <th>Validity</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -88,10 +90,50 @@
     </div>
 
     <script>
-        // JavaScript for Plans
-        document.addEventListener('DOMContentLoaded', function() {
-            // Add plan-specific JavaScript here
-        });
+          //fetch hotspot clients from endpoint
+          const baseUrl = 'http://192.168.88.253:8000'; // Update this as required
+
+// Fetch hotspot users from /hotspot_users endpoint
+async function fetchpackages() {
+  try {
+    const response = await fetch(`${baseUrl}/packages`);
+    if (!response.ok) {
+      throw new Error(`Error fetching packages: ${response.status} ${response.statusText}`);
+    }
+    const data = await response.json();
+    console.log('packages:', data);
+    updateTable(data);
+  } catch (error) {
+    console.error('Failed to fetch packages:', error);
+  }
+}
+function updateTable(users) {
+    const tableBody = document.querySelector("table tbody");
+    tableBody.innerHTML = ""; // Clear existing rows
+
+    users.forEach((user, index) => {
+      const row = document.createElement("tr");
+      const status = user.expires_at && new Date(user.expires_at) > new Date() ? "Active" : "Expired";
+
+
+      row.innerHTML = `
+        <td data-label="ID">${index + 1}</td>
+        <td data-label="plan">${user.name}</td>
+        <td data-label="Description">${user.description}</td>
+        <td data-label="Service type">${user.service_type || "N/A"}</td>
+        <td data-label="price">Sh.${user.price}</td>
+        <td data-label="validity">${user.validity_days} days</td>
+      `;
+
+      tableBody.appendChild(row);
+    });
+  }
+
+  // Load data when the page is ready
+window.addEventListener('DOMContentLoaded', () => {
+      fetchpackages();
+    });
+
     </script>
 </body>
 </html>

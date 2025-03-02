@@ -5,13 +5,19 @@ from datetime import datetime
 from typing import List
 from fastapi import HTTPException
 #create ppp user service
-def create_ppp_user(name: str):
+def create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str):
     db = SessionLocal()
     try:
-        ppp_user = crud.create_ppp_user(db, name)
+        ppp_user = crud.create_ppp_user(db, name, email, pppoe_username, pppoe_password, mobile_number, location, apartment, profile)
         crud.create_log(db, description=f"PPP User {name} created", phone_number=None)
         return {
-            "name": ppp_user.name
+            "name": ppp_user.name,
+            "email": ppp_user.email,
+            "pppoe_username": ppp_user.pppoe_username,
+            "mobile_number": ppp_user.mobile_number,
+            "location": ppp_user.location,
+            "apartment": ppp_user.apartment,
+            "profile": ppp_user.profile,
         }
     except Exception as e:
         crud.create_log(db, description=f"Failed to create PPP User {name}: {str(e)}", phone_number=None)
@@ -25,7 +31,17 @@ def get_ppp_users():
         ppp_user_list = []
         for ppp_user in ppp_users:
             ppp_user_list.append({
-                "name": ppp_user.name
+            "id":ppp_user.id,
+            "name": ppp_user.name,
+            "email": ppp_user.email,
+            "pppoe_username": ppp_user.pppoe_username,
+            "mobile_number": ppp_user.mobile_number,
+            "location": ppp_user.location,
+            "apartment": ppp_user.apartment,
+            "profile": ppp_user.profile,
+            "created_at":ppp_user.created_at,
+            "expires_on":ppp_user.expires_on
+                
             })
         return ppp_user_list
     except Exception as e:

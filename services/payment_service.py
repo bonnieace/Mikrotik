@@ -44,7 +44,7 @@ async def initiate_stk_push(phone_number: str, amount: int):
             "Password": "MTc0Mzc5YmZiMjc5ZjlhYTliZGJjZjE1OGU5N2RkNzFhNDY3Y2QyZTBjODkzMDU5YjEwZjc4ZTZiNzJhZGExZWQyYzkxOTIwMTYwMjE2MTY1NjI3",    
             "Timestamp": "20160216165627",    
             "TransactionType": "CustomerPayBillOnline",    
-            "Amount": str(amount),    
+            "Amount": '1',    
             "PartyA": phone_number,    
             "PartyB": "174379",    
             "PhoneNumber": phone_number,    
@@ -159,10 +159,12 @@ def get_payments():
         payment_list = []
         for payment in payments:
             payment_list.append({
+                "id":payment.id,
                 "invoice": payment.invoice,
                 "amount": payment.amount,
                 "user_type": payment.user_type,
-                "user_id": payment.user_id
+                "user_id": payment.user_id,
+                "created_at":payment.created_at
             })
         return payment_list
     except Exception as e:
@@ -177,10 +179,13 @@ def get_payments_by_user_type(user_type: str):
         payment_list = []
         for payment in payments:
             payment_list.append({
+                "id":payment.id,
                 "invoice": payment.invoice,
                 "amount": payment.amount,
                 "user_type": payment.user_type,
-                "user_id": payment.user_id
+                "user_id": payment.user_id,
+                "created_at":payment.created_at
+
             })
         return payment_list
     except Exception as e:
@@ -198,4 +203,15 @@ def get_total_payment_by_user_type(user_type: str):
         return total_payment
     except Exception as e:
         crud.create_log(db, description=f"Failed to get payments: {str(e)}", phone_number=None)
+        raise HTTPException(status_code=400, detail=str(e))
+#read payment totals for the current day by user type
+def get_total_payment_for_today_by_user_type(user_type: str):
+    db = SessionLocal()
+    try:
+    
+        payments = crud.get_payment_totals_for_today_by_user_type(db, user_type )
+        
+        return payments
+    except Exception as e:
+        crud.create_log(db, description=f"Failed to get today's payments: {str(e)}", phone_number=None)
         raise HTTPException(status_code=400, detail=str(e))
