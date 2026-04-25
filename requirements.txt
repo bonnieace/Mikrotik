@@ -9,3 +9,4 @@ SQLAlchemy==2.0.31
 gunicorn
 uvicorn[standard]
 pymysql
+cryptography==46.0.5
