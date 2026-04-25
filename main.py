@@ -7,8 +7,13 @@ from services.payment_service import get_payments, get_payments_by_user_type, ge
 from services.package_service import create_package, get_packages
 from services.ppp_service import create_ppp_user, get_ppp_users
 from fastapi.middleware.cors import CORSMiddleware
+from database.session import Base, engine
 
 app = FastAPI()
+
+@app.on_event("startup")
+def startup():
+    Base.metadata.create_all(bind=engine)
 origins = [
     "*",  # Replace with the origin of your frontend
 ]
