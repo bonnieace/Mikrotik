@@ -1,9 +1,14 @@
+import os
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-# Database URL (update with your credentials)
-DATABASE_URL = "mysql+pymysql://root:@localhost/uzanet"
+load_dotenv()
+
+# Database URL read from environment variable, with a fallback for local dev
+DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://root:@localhost/uzanet")
 
 # Create the engine
 engine = create_engine(DATABASE_URL)
