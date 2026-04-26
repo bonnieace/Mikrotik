@@ -10,3 +10,5 @@ gunicorn
 uvicorn[standard]
 pymysql
 cryptography==46.0.5
+alembic==1.13.3
+PyJWT==2.12.0

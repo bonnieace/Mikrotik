@@ -3,6 +3,8 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import jwt
+from alembic.config import Config as AlembicConfig
+from alembic import command as alembic_command
 
 from services.hotspot_service import create_hotspot_user, get_hotspot_users
 from services.logs_service import create_log, get_logs
@@ -38,6 +40,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+def run_migrations():
+    alembic_cfg = AlembicConfig("alembic.ini")
+    alembic_command.upgrade(alembic_cfg, "head")
 
 # --- Public Endpoints ---
 @app.post("/stkpush/initiate")
@@ -168,4 +175,4 @@ async def get_today_total_payment_by_user_type_endpoint(user_type: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# To run: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+# To run: uvicorn mono:app --host 0.0.0.0 --port 8000 --reload
