@@ -29,6 +29,16 @@ app = FastAPI()
 
 # Utility function to connect to the router
 def connect_to_router():
+    missing = [name for name, val in [
+        ("MIKROTIK_HOST", MIKROTIK_HOST),
+        ("MIKROTIK_USER", MIKROTIK_USER),
+        ("MIKROTIK_PASSWORD", MIKROTIK_PASSWORD),
+    ] if not val]
+    if missing:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Missing required MikroTik configuration: {', '.join(missing)}"
+        )
     try:
         api = connect(
             username=MIKROTIK_USER,
