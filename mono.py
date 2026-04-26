@@ -32,11 +32,11 @@ async def authenticate(token: str = Depends(oauth2_scheme)):
     return payload
 
 # --- FastAPI Application Setup ---
-app = FastAPI()
+app = FastAPI(redirect_slashes=False)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # adjust for your frontend origin
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
