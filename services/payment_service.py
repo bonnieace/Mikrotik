@@ -44,7 +44,7 @@ async def initiate_stk_push(phone_number: str, amount: int):
             "Password": "MTc0Mzc5YmZiMjc5ZjlhYTliZGJjZjE1OGU5N2RkNzFhNDY3Y2QyZTBjODkzMDU5YjEwZjc4ZTZiNzJhZGExZWQyYzkxOTIwMTYwMjE2MTY1NjI3",    
             "Timestamp": "20160216165627",    
             "TransactionType": "CustomerPayBillOnline",    
-            "Amount": '1',    
+            "Amount": amount,    
             "PartyA": phone_number,    
             "PartyB": "174379",    
             "PhoneNumber": phone_number,    
@@ -93,7 +93,7 @@ async def initiate_stk_push(phone_number: str, amount: int):
                     # Generate user credentials
                     username = f"user_{''.join(random.choices(string.digits, k=6))}"
                     password = "pass123"
-                    if amount == 1:
+                    if amount == 10:
                         uptime = '1h'
                     elif amount == 50:
                         uptime = '1d'

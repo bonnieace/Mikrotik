@@ -1,151 +1,171 @@
-from datetime import datetime
-from fastapi import FastAPI, HTTPException
+from datetime import datetime, timedelta
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+import jwt
+
 from services.hotspot_service import create_hotspot_user, get_hotspot_users
 from services.logs_service import create_log, get_logs
 from services.mikrotik_service import fetch_rt_rx_tx_data
-from services.payment_service import get_payments, get_payments_by_user_type, get_total_payment_by_user_type, get_total_payment_for_today_by_user_type,  initiate_stk_push
+from services.payment_service import (
+    get_payments,
+    get_payments_by_user_type,
+    get_total_payment_by_user_type,
+    get_total_payment_for_today_by_user_type,
+    initiate_stk_push
+)
 from services.package_service import create_package, get_packages
 from services.ppp_service import create_ppp_user, get_ppp_users
-from fastapi.middleware.cors import CORSMiddleware
 
+# --- Configuration for OAuth2 JWT Authentication ---
+SECRET_KEY = "your-secret-key"  # TODO: move to environment variable or secure vault
+ALGORITHM = "HS256"
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
+
+async def authenticate(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return payload
+
+# --- FastAPI Application Setup ---
 app = FastAPI()
-origins = [
-    "*",  # Replace with the origin of your frontend
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # Adjust as needed
+    allow_origins=["*"],  # adjust for your frontend origin
     allow_credentials=True,
-    allow_methods=["*"],    # Allow all HTTP methods
-    allow_headers=["*"],    # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
+# --- Public Endpoints ---
 @app.post("/stkpush/initiate")
 async def initiate_stk_push_endpoint(phone_number: str, amount: int):
     try:
-        result = await initiate_stk_push(phone_number, amount)
-        return result
+        return await initiate_stk_push(phone_number, amount)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-#create package endpoint
-@app.post("/package")
-async def create_package_endpoint(name: str, description: str, price: float, service_type: str, validity_days: int):
+# Token endpoint for Swagger UI
+@app.post("/token")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    # TODO: Replace with real user credential verification
+    if form_data.username != "admin" or form_data.password != "secret":
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    expire = datetime.utcnow() + timedelta(hours=1)
+    token_payload = {"sub": form_data.username, "exp": expire}
+    token = jwt.encode(token_payload, SECRET_KEY, algorithm=ALGORITHM)
+    return {"access_token": token, "token_type": "bearer"}
+
+# --- Protected Endpoints (Swagger UI will show lock icon) ---
+@app.post("/package", dependencies=[Depends(authenticate)])
+async def create_package_endpoint(
+    name: str,
+    description: str,
+    price: float,
+    service_type: str,
+    validity_days: int
+):
     try:
-        package = create_package(name, description, price, service_type, validity_days)
-        return package
+        return create_package(name, description, price, service_type, validity_days)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
-#read all packages endpoint
-@app.get("/packages")
+
+@app.get("/packages", dependencies=[Depends(authenticate)])
 async def get_packages_endpoint():
     try:
-        packages = get_packages()
-        return packages
+        return get_packages()
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-#read all payments endpoint
-@app.get("/payments")
+@app.get("/payments", dependencies=[Depends(authenticate)])
 async def get_payments_endpoint():
     try:
-        payments = get_payments()
-        return payments
+        return get_payments()
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
-#read payments by user type endpoint
-@app.get("/payments/{user_type}")
+
+@app.get("/payments/{user_type}", dependencies=[Depends(authenticate)])
 async def get_payments_by_user_type_endpoint(user_type: str):
     try:
-        payments = get_payments_by_user_type(user_type)
-        return payments
+        return get_payments_by_user_type(user_type)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
-#return total payment for a specific  usertype 
-@app.get("/payments/total/{user_type}")
+
+@app.get("/payments/total/{user_type}", dependencies=[Depends(authenticate)])
 async def get_total_payment_by_user_type_endpoint(user_type: str):
     try:
-        total_payment = get_total_payment_by_user_type(user_type)
-        return {"total_payment": total_payment}
+        return {"total_payment": get_total_payment_by_user_type(user_type)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e)) 
+        raise HTTPException(status_code=400, detail=str(e))
 
-#get hotspot users endpoint
-@app.get("/hotspot_users")
+@app.get("/hotspot_users", dependencies=[Depends(authenticate)])
 async def get_hotspot_users_endpoint():
     try:
-        hotspot_users = get_hotspot_users()
-        return hotspot_users
+        return get_hotspot_users()
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
-#get logs endpoint
-@app.get("/logs")
+
+@app.get("/logs", dependencies=[Depends(authenticate)])
 async def get_logs_endpoint():
     try:
-        logs = get_logs()
-        return logs
+        return get_logs()
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
-# #create log endpoint
-@app.post("/log")
+
+@app.post("/log", dependencies=[Depends(authenticate)])
 async def create_log_endpoint(description: str, phone_number: str = None):
     try:
-        log = create_log(description, phone_number)
-        return log
+        return create_log(description, phone_number)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
- #create ppp user endpoint
-@app.post("/ppp_user")
-async def create_ppp_user_endpoint(name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str):
+
+@app.post("/ppp_user", dependencies=[Depends(authenticate)])
+async def create_ppp_user_endpoint(
+    name: str,
+    email: str,
+    pppoe_username: str,
+    pppoe_password: str,
+    mobile_number: str,
+    location: str,
+    apartment: str,
+    profile: str
+):
     try:
-        ppp_user = create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile)
-        return ppp_user
+        return create_ppp_user(
+            name, email, pppoe_username, pppoe_password,
+            mobile_number, location, apartment, profile
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
-#read all ppp users endpoint
-@app.get("/ppp_users")
+
+@app.get("/ppp_users", dependencies=[Depends(authenticate)])
 async def get_ppp_users_endpoint():
     try:
-        ppp_users = get_ppp_users()
-        return ppp_users
+        return get_ppp_users()
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
-#create hotspot user endpoint
-@app.post("/hotspot_user")
+
+@app.post("/hotspot_user", dependencies=[Depends(authenticate)])
 async def create_hotspot_user_endpoint(phone_number: str, amount: int, otp: str):
     try:
-        hotspot_user = create_hotspot_user(phone_number, amount, otp)
-        return hotspot_user
+        return create_hotspot_user(phone_number, amount, otp)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-#fetch rt rx data endpoint from service
-@app.get("/rt_rx_data")
+@app.get("/rt_rx_data", dependencies=[Depends(authenticate)])
 async def fetch_rt_rx_data_endpoint():
     try:
-        rt_rx_data = fetch_rt_rx_tx_data()
-        return rt_rx_data
+        return fetch_rt_rx_tx_data()
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
 
-#read payment totals for the current day by user type
-@app.get("/payments/today/total/{user_type}")
+@app.get("/payments/today/total/{user_type}", dependencies=[Depends(authenticate)])
 async def get_today_total_payment_by_user_type_endpoint(user_type: str):
     try:
-        
-        total_payment = get_total_payment_for_today_by_user_type(user_type,)
-        return {"total_payment": total_payment}
+        return {"total_payment": get_total_payment_for_today_by_user_type(user_type)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-    
-#uvicorn mono:app --host 0.0.0.0 --port 8000 --reload
+
+# To run: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
