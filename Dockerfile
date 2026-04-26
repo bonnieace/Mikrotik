@@ -11,4 +11,6 @@ COPY . .
 
 EXPOSE 8080
 
-CMD ["gunicorn", "mono:app", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8080", "--workers", "2"]
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]

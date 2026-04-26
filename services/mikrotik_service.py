@@ -19,7 +19,7 @@ load_dotenv()
 
 # MikroTik connection details
 MIKROTIK_HOST = os.getenv("MIKROTIK_HOST")
-MIKROTIK_PORT = int(os.getenv("MIKROTIK_PORT"))
+MIKROTIK_PORT = int(os.getenv("MIKROTIK_PORT", "8728"))
 MIKROTIK_USER = os.getenv("MIKROTIK_USER")
 MIKROTIK_PASSWORD = os.getenv("MIKROTIK_PASSWORD")
 
@@ -29,6 +29,16 @@ app = FastAPI()
 
 # Utility function to connect to the router
 def connect_to_router():
+    missing = [name for name, val in [
+        ("MIKROTIK_HOST", MIKROTIK_HOST),
+        ("MIKROTIK_USER", MIKROTIK_USER),
+        ("MIKROTIK_PASSWORD", MIKROTIK_PASSWORD),
+    ] if not val]
+    if missing:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Missing required MikroTik configuration: {', '.join(missing)}"
+        )
     try:
         api = connect(
             username=MIKROTIK_USER,
