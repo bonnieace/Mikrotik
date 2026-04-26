@@ -7,8 +7,15 @@ from services.payment_service import get_payments, get_payments_by_user_type, ge
 from services.package_service import create_package, get_packages
 from services.ppp_service import create_ppp_user, get_ppp_users
 from fastapi.middleware.cors import CORSMiddleware
+from alembic.config import Config
+from alembic import command
 
 app = FastAPI()
+
+@app.on_event("startup")
+def run_migrations():
+    alembic_cfg = Config("alembic.ini")
+    command.upgrade(alembic_cfg, "head")
 origins = [
     "*",  # Replace with the origin of your frontend
 ]
