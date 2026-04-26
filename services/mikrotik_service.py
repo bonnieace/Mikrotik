@@ -19,7 +19,7 @@ load_dotenv()
 
 # MikroTik connection details
 MIKROTIK_HOST = os.getenv("MIKROTIK_HOST")
-MIKROTIK_PORT = int(os.getenv("MIKROTIK_PORT"))
+MIKROTIK_PORT = int(os.getenv("MIKROTIK_PORT", "8728"))
 MIKROTIK_USER = os.getenv("MIKROTIK_USER")
 MIKROTIK_PASSWORD = os.getenv("MIKROTIK_PASSWORD")
 
