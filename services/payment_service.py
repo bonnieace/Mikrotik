@@ -98,7 +98,7 @@ async def initiate_stk_push(phone_number: str, amount: int):
                 
                 if result_code == "0":  # Successful payment
                     # Generate user credentials
-                    username = f"user_{''.join(random.choices(string.digits, k=6))}"
+                    username = ''.join(random.choices(string.digits, k=8))
                     password = "pass123"
                     if amount == 10:
                         uptime = '1h'

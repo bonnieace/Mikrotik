@@ -7,7 +7,7 @@ class HotspotUser(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     phone_number = Column(String(20), nullable=False)
     amount = Column(DECIMAL(10, 2), nullable=False, default=0.00)
-    otp = Column(String(10), nullable=True)
+    otp = Column(String(50), nullable=True)
     expires_at = Column(DateTime, nullable=True)
     package_id = Column(Integer, ForeignKey("packages.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
