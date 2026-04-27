@@ -37,6 +37,7 @@ class Router(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(125), nullable=False)
     ip_address = Column(String(125), nullable=False)
+    port = Column(Integer, nullable=False, default=8728)
     username = Column(String(125), nullable=False)
     password = Column(String(125), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)

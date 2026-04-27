@@ -16,6 +16,7 @@ from services.payment_service import (
 )
 from services.package_service import create_package, get_packages
 from services.ppp_service import create_ppp_user, get_ppp_users
+from services.router_service import create_router, get_routers
 
 # --- Configuration for OAuth2 JWT Authentication ---
 SECRET_KEY = "your-secret-key"  # TODO: move to environment variable or secure vault
@@ -165,6 +166,26 @@ async def fetch_rt_rx_data_endpoint():
 async def get_today_total_payment_by_user_type_endpoint(user_type: str):
     try:
         return {"total_payment": get_total_payment_for_today_by_user_type(user_type)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/router", dependencies=[Depends(authenticate)])
+async def create_router_endpoint(
+    name: str,
+    ip_address: str,
+    password: str,
+    port: int = 8728,
+    username: str = "admin",
+):
+    try:
+        return create_router(name, ip_address, port, username, password)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/routers", dependencies=[Depends(authenticate)])
+async def get_routers_endpoint():
+    try:
+        return get_routers()
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
