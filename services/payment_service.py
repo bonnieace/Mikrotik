@@ -1,4 +1,5 @@
 import time
+import base64
 
 from fastapi import HTTPException
 from database import crud
@@ -13,6 +14,12 @@ from services.mikrotik_service import connect_to_router
 
 # Constants
 BASE_URL = "https://sandbox.safaricom.co.ke"
+BUSINESS_SHORT_CODE = "174379"
+LIPA_NA_MPESA_PASSKEY = "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"
+
+def _generate_mpesa_password(timestamp: str) -> str:
+    raw = BUSINESS_SHORT_CODE + LIPA_NA_MPESA_PASSKEY + timestamp
+    return base64.b64encode(raw.encode()).decode()
 CONSUMER_KEY = "YJwAugvyRWklll798WT0CRP60IlaC4GsmXaDaG3tESRzJzfF"
 CONSUMER_SECRET = "ouz2P5YwOAKoRBnyJj8UVAIS8fZhqALYTM5NrUDG0Pu5Y5L8KdYw8z0TcFzdI0Nn"
 
@@ -40,9 +47,9 @@ async def initiate_stk_push(phone_number: str, amount: int):
         headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
         timestamp = time.strftime("%Y%m%d%H%M%S")
         payload = {
-            "BusinessShortCode": "174379",    
-            "Password": "MTc0Mzc5YmZiMjc5ZjlhYTliZGJjZjE1OGU5N2RkNzFhNDY3Y2QyZTBjODkzMDU5YjEwZjc4ZTZiNzJhZGExZWQyYzkxOTIwMTYwMjE2MTY1NjI3",    
-            "Timestamp": "20160216165627",    
+            "BusinessShortCode": BUSINESS_SHORT_CODE,
+            "Password": _generate_mpesa_password(timestamp),
+            "Timestamp": timestamp,
             "TransactionType": "CustomerPayBillOnline",    
             "Amount": amount,    
             "PartyA": phone_number,    
@@ -74,11 +81,11 @@ async def initiate_stk_push(phone_number: str, amount: int):
             
             query_url = f"{BASE_URL}/mpesa/stkpushquery/v1/query"
             headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-            timestamp = time.strftime("%Y%m%d%H%M%S")
+            query_timestamp = time.strftime("%Y%m%d%H%M%S")
             query_payload = {
-                "BusinessShortCode": "174379",    
-                "Password": "MTc0Mzc5YmZiMjc5ZjlhYTliZGJjZjE1OGU5N2RkNzFhNDY3Y2QyZTBjODkzMDU5YjEwZjc4ZTZiNzJhZGExZWQyYzkxOTIwMTYwMjE2MTY1NjI3",    
-                "Timestamp": "20160216165627",
+                "BusinessShortCode": BUSINESS_SHORT_CODE,
+                "Password": _generate_mpesa_password(query_timestamp),
+                "Timestamp": query_timestamp,
                 "CheckoutRequestID": checkout_request_id
             }
 

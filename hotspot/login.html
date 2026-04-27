@@ -372,7 +372,7 @@ console.log("Processed Phone Number:", payload.phone_number);
 // Example: send payload to backend via fetch
     
     // Send the POST request
-    fetch("http://192.168.88.253:8000/stkpush/initiate?phone_number="+processedPhoneNumber+"&amount="+capturedPrice, {
+    fetch("http://10.10.10.1:8083/stkpush/initiate?phone_number="+processedPhoneNumber+"&amount="+capturedPrice, {
         method: "POST",
         headers: {
             "Content-Type": "application/json"
