@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from .models import HotspotUser, PPPUser, Payment, Log , Package
+from .models import HotspotUser, PPPUser, Payment, Log, Package, Router
 
 # Hotspot User CRUD
 def create_hotspot_user(db: Session, phone_number: str, amount: float, otp: str):
@@ -87,6 +87,23 @@ def create_ppp_user(db: Session, name,email,pppoe_username,pppoe_password,mobile
 #get ppp users
 def get_ppp_users(db: Session):
     return db.query(PPPUser).all()
+
+# Router CRUD
+def create_router(db: Session, name: str, ip_address: str, port: int, username: str, password: str):
+    db_router = Router(
+        name=name,
+        ip_address=ip_address,
+        port=port,
+        username=username,
+        password=password,
+    )
+    db.add(db_router)
+    db.commit()
+    db.refresh(db_router)
+    return db_router
+
+def get_routers(db: Session):
+    return db.query(Router).all()
 
 from datetime import datetime, timedelta
 # Mapping of amount to duration
