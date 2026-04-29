@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from typing import Optional
 import jwt
 
 from services.hotspot_service import create_hotspot_user, get_hotspot_users
@@ -16,7 +17,7 @@ from services.payment_service import (
 )
 from services.package_service import create_package, get_packages
 from services.ppp_service import create_ppp_user, get_ppp_users
-from services.router_service import create_router, get_routers
+from services.router_service import create_router, get_routers, ping_routers
 
 # --- Configuration for OAuth2 JWT Authentication ---
 SECRET_KEY = "your-secret-key"  # TODO: move to environment variable or secure vault
@@ -186,6 +187,13 @@ async def create_router_endpoint(
 async def get_routers_endpoint():
     try:
         return get_routers()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/routers/ping", dependencies=[Depends(authenticate)])
+async def ping_routers_endpoint(router_id: Optional[int] = None):
+    try:
+        return ping_routers(router_id=router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
