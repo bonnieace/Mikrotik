@@ -11,8 +11,12 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://root:@localhost/uzanet")
 
 # Create the engine
-engine = create_engine(DATABASE_URL)
 
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,        # Always test for connection liveness, best catch-all!
+    pool_recycle=280,          # Force SQLA to reconnect after X seconds (well under MySQL's wait_timeout)
+)
 # Create a configured Session class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
