@@ -81,9 +81,6 @@ def upgrade():
         )
     )
 
-    # 6. Make owner_id NOT NULL
-    op.alter_column('routers', 'owner_id', existing_type=sa.Integer(), nullable=False)
-
 
 def downgrade():
     op.drop_constraint('fk_routers_owner_id_admin_users', 'routers', type_='foreignkey')
