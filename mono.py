@@ -5,6 +5,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from typing import Optional
 import jwt
 
+from services.active_users_service import get_hotspot_active_users, get_ppp_active_users
 from services.hotspot_service import create_hotspot_user, get_hotspot_users
 from services.logs_service import create_log, get_logs
 from services.mikrotik_service import fetch_rt_rx_tx_data
@@ -196,5 +197,31 @@ async def ping_routers_endpoint(router_id: Optional[int] = None):
         return ping_routers(router_id=router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/active_users", dependencies=[Depends(authenticate)])
+async def get_active_users_endpoint(router_id: Optional[int] = None):
+    """Return currently active hotspot and PPPoE sessions from one or all configured routers."""
+    try:
+        hotspot_active = get_hotspot_active_users(router_id=router_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    pppoe_available = True
+    try:
+        pppoe_active = get_ppp_active_users(router_id=router_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        pppoe_available = False
+        pppoe_active = []
+
+    return {
+        "generated_at": datetime.utcnow().isoformat(),
+        "hotspot_active": hotspot_active,
+        "pppoe_active": pppoe_active,
+        "pppoe_available": pppoe_available,
+    }
 
 # To run: uvicorn mono:app --host 0.0.0.0 --port 8000 --reload
