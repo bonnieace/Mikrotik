@@ -105,6 +105,10 @@ def create_router(db: Session, name: str, ip_address: str, port: int, username: 
 def get_routers(db: Session):
     return db.query(Router).all()
 
+def get_router_by_id(db: Session, router_id: int):
+    """Return the Router record with the given primary key, or None if not found."""
+    return db.query(Router).filter(Router.id == router_id).first()
+
 from datetime import datetime, timedelta
 # Mapping of amount to duration
 UPTIME_MAPPING = {
