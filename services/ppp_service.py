@@ -2,7 +2,7 @@ from database import crud
 from database import models
 from database.session import SessionLocal
 from datetime import datetime
-from typing import List
+from typing import Optional
 from fastapi import HTTPException
 from services.mikrotik_service import connect_to_router
 
@@ -38,7 +38,7 @@ def create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,locat
         db.close()
 
 #read all ppp users service
-def get_ppp_users(router_id: int = None):
+def get_ppp_users(router_id: Optional[int] = None):
     db = SessionLocal()
     try:
         ppp_users = crud.get_ppp_users(db, router_id=router_id)

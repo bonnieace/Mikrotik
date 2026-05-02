@@ -2,7 +2,7 @@ from database import crud
 from database import models
 from database.session import SessionLocal
 from datetime import datetime
-from typing import List
+from typing import Optional
 from fastapi import HTTPException
 #log service
 def create_log(description: str, phone_number: str = None, router_id: int = None):
@@ -16,7 +16,7 @@ def create_log(description: str, phone_number: str = None, router_id: int = None
         db.close()
     
 #read all logs service
-def get_logs(router_id: int = None):
+def get_logs(router_id: Optional[int] = None):
     db = SessionLocal()
     try:
         logs = crud.get_logs(db, router_id=router_id)

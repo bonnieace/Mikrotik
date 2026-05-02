@@ -1,6 +1,22 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, DECIMAL
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, DECIMAL, Boolean
+from sqlalchemy.orm import relationship
 from .session import Base
 from datetime import datetime
+
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(125), unique=True, nullable=False)
+    email = Column(String(255), unique=True, nullable=True)
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(String(50), nullable=False, default="isp")  # "superadmin" or "isp"
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    routers = relationship("Router", back_populates="owner")
+
 
 class HotspotUser(Base):
     __tablename__ = "hotspot_users"
@@ -42,8 +58,11 @@ class Router(Base):
     port = Column(Integer, nullable=False, default=8728)
     username = Column(String(125), nullable=False)
     password = Column(String(125), nullable=False)
+    owner_id = Column(Integer, ForeignKey("admin_users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    owner = relationship("AdminUser", back_populates="routers")
 
 class Package(Base):
     __tablename__ = "packages"

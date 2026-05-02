@@ -2,12 +2,12 @@ from database import crud
 from database import models
 from database.session import SessionLocal
 from datetime import datetime
-from typing import List
+from typing import Optional
 from fastapi import HTTPException
 from services.mikrotik_service import connect_to_router
 import httpx
 #get all hotspot users service
-def get_hotspot_users(router_id: int = None):
+def get_hotspot_users(router_id: Optional[int] = None):
     db = SessionLocal()
     try:
         hotspot_users = crud.get_hotspot_users(db, router_id=router_id)

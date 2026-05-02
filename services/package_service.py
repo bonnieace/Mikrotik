@@ -2,7 +2,7 @@ from database import crud
 from database import models
 from database.session import SessionLocal
 from datetime import datetime
-from typing import List
+from typing import Optional
 from fastapi import HTTPException
 
 #create package service
@@ -28,7 +28,7 @@ def create_package(name: str, description: str, price: float, service_type: str,
 
 #read all packages service
 
-def get_packages(router_id: int = None):
+def get_packages(router_id: Optional[int] = None):
     db = SessionLocal()
     try:
         packages = crud.get_packages(db, router_id=router_id)

@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
-from .models import HotspotUser, PPPUser, Payment, Log, Package, Router
+from .models import HotspotUser, PPPUser, Payment, Log, Package, Router, AdminUser
+from typing import Optional
 
 # Hotspot User CRUD
 def create_hotspot_user(db: Session, phone_number: str, amount: float, otp: str, router_id: int = None):
@@ -48,21 +49,21 @@ def create_package(db: Session, name: str, description: str, price: float, servi
     return db_package
 
 #read all payments
-def get_payments(db: Session, router_id: int = None):
+def get_payments(db: Session, router_id: Optional[int] = None):
     query = db.query(Payment)
     if router_id is not None:
         query = query.filter(Payment.router_id == router_id)
     return query.all()
 
 #read payments by user type
-def get_payments_by_user_type(db: Session, user_type: str, router_id: int = None):
+def get_payments_by_user_type(db: Session, user_type: str, router_id: Optional[int] = None):
     query = db.query(Payment).filter(Payment.user_type == user_type)
     if router_id is not None:
         query = query.filter(Payment.router_id == router_id)
     return query.all()
 
 #read payment totals for the current day by user type
-def get_payment_totals_for_today_by_user_type(db: Session, user_type: str, router_id: int = None):
+def get_payment_totals_for_today_by_user_type(db: Session, user_type: str, router_id: Optional[int] = None):
     today = datetime.now().date()
     query = db.query(Payment).filter(
         Payment.user_type == user_type,
@@ -75,21 +76,21 @@ def get_payment_totals_for_today_by_user_type(db: Session, user_type: str, route
     return total_amount
 
 #read all logs
-def get_logs(db: Session, router_id: int = None):
+def get_logs(db: Session, router_id: Optional[int] = None):
     query = db.query(Log)
     if router_id is not None:
         query = query.filter(Log.router_id == router_id)
     return query.all()
 
 #read all packages
-def get_packages(db: Session, router_id: int = None):
+def get_packages(db: Session, router_id: Optional[int] = None):
     query = db.query(Package)
     if router_id is not None:
         query = query.filter(Package.router_id == router_id)
     return query.all()
 
 #read all hotspot users
-def get_hotspot_users(db: Session, router_id: int = None):
+def get_hotspot_users(db: Session, router_id: Optional[int] = None):
     query = db.query(HotspotUser)
     if router_id is not None:
         query = query.filter(HotspotUser.router_id == router_id)
@@ -104,31 +105,57 @@ def create_ppp_user(db: Session, name,email,pppoe_username,pppoe_password,mobile
     return db_ppp_user
 
 #get ppp users
-def get_ppp_users(db: Session, router_id: int = None):
+def get_ppp_users(db: Session, router_id: Optional[int] = None):
     query = db.query(PPPUser)
     if router_id is not None:
         query = query.filter(PPPUser.router_id == router_id)
     return query.all()
 
 # Router CRUD
-def create_router(db: Session, name: str, ip_address: str, port: int, username: str, password: str):
+def create_router(db: Session, name: str, ip_address: str, port: int, username: str, password: str, owner_id: int = None):
     db_router = Router(
         name=name,
         ip_address=ip_address,
         port=port,
         username=username,
         password=password,
+        owner_id=owner_id,
     )
     db.add(db_router)
     db.commit()
     db.refresh(db_router)
     return db_router
 
-def get_routers(db: Session):
-    return db.query(Router).all()
+def get_routers(db: Session, owner_id: Optional[int] = None):
+    query = db.query(Router)
+    if owner_id is not None:
+        query = query.filter(Router.owner_id == owner_id)
+    return query.all()
 
 def get_router_by_id(db: Session, router_id: int):
     return db.query(Router).filter(Router.id == router_id).first()
+
+# AdminUser CRUD
+def create_admin_user(db: Session, username: str, hashed_password: str, role: str = "isp", email: str = None):
+    db_user = AdminUser(
+        username=username,
+        email=email,
+        hashed_password=hashed_password,
+        role=role,
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+def get_admin_user_by_username(db: Session, username: str):
+    return db.query(AdminUser).filter(AdminUser.username == username).first()
+
+def get_admin_user_by_id(db: Session, user_id: int):
+    return db.query(AdminUser).filter(AdminUser.id == user_id).first()
+
+def list_admin_users(db: Session):
+    return db.query(AdminUser).all()
 
 from datetime import datetime, timedelta
 # Mapping of amount to duration

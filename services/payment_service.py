@@ -8,6 +8,7 @@ import asyncio
 import random
 import string
 from datetime import datetime, timedelta
+from typing import List, Optional
 from database.crud import create_hotspot_user, create_payment, create_log
 from database.session import SessionLocal
 from services.mikrotik_service import connect_to_router
@@ -160,7 +161,7 @@ async def initiate_stk_push(phone_number: str, amount: int, router_id: int):
         db.close()
 
 #read all payments service
-def get_payments(router_id: int = None):
+def get_payments(router_id: Optional[int] = None):
     db = SessionLocal()
     try:
         payments = crud.get_payments(db, router_id=router_id)
@@ -182,7 +183,7 @@ def get_payments(router_id: int = None):
         db.close()
     
 #read payments by user type service
-def get_payments_by_user_type(user_type: str, router_id: int = None):
+def get_payments_by_user_type(user_type: str, router_id: Optional[int] = None):
     db = SessionLocal()
     try:
         payments = crud.get_payments_by_user_type(db, user_type, router_id=router_id)
@@ -205,7 +206,7 @@ def get_payments_by_user_type(user_type: str, router_id: int = None):
         db.close()
     
 #return total payment for by user type
-def get_total_payment_by_user_type(user_type: str, router_id: int = None):
+def get_total_payment_by_user_type(user_type: str, router_id: Optional[int] = None):
     db = SessionLocal()
     try:
         payments = crud.get_payments_by_user_type(db, user_type, router_id=router_id)
@@ -219,7 +220,7 @@ def get_total_payment_by_user_type(user_type: str, router_id: int = None):
     finally:
         db.close()
 #read payment totals for the current day by user type
-def get_total_payment_for_today_by_user_type(user_type: str, router_id: int = None):
+def get_total_payment_for_today_by_user_type(user_type: str, router_id: Optional[int] = None):
     db = SessionLocal()
     try:
         payments = crud.get_payment_totals_for_today_by_user_type(db, user_type, router_id=router_id)

@@ -6,10 +6,10 @@ import socket
 import time
 
 
-def create_router(name: str, ip_address: str, port: int, username: str, password: str):
+def create_router(name: str, ip_address: str, port: int, username: str, password: str, owner_id: int = None):
     db = SessionLocal()
     try:
-        router = crud.create_router(db, name, ip_address, port, username, password)
+        router = crud.create_router(db, name, ip_address, port, username, password, owner_id=owner_id)
         crud.create_log(db, description=f"Router '{name}' ({ip_address}:{port}) created", router_id=router.id)
         return {
             "id": router.id,
@@ -25,10 +25,10 @@ def create_router(name: str, ip_address: str, port: int, username: str, password
         db.close()
 
 
-def get_routers():
+def get_routers(owner_id: Optional[int] = None):
     db = SessionLocal()
     try:
-        routers = crud.get_routers(db)
+        routers = crud.get_routers(db, owner_id=owner_id)
         return [
             {
                 "id": r.id,
@@ -36,6 +36,7 @@ def get_routers():
                 "ip_address": r.ip_address,
                 "port": r.port,
                 "username": r.username,
+                "owner_id": r.owner_id,
                 "created_at": r.created_at,
                 "updated_at": r.updated_at,
             }
@@ -47,10 +48,12 @@ def get_routers():
         db.close()
 
 
-def ping_routers(router_id: Optional[int] = None, timeout: float = 2.0):
+def ping_routers(router_id: Optional[int] = None, allowed_ids=None, timeout: float = 2.0):
     db = SessionLocal()
     try:
         routers = crud.get_routers(db)
+        if allowed_ids is not None:
+            routers = [r for r in routers if r.id in allowed_ids]
         if router_id is not None:
             routers = [router for router in routers if router.id == router_id]
             if not routers:
