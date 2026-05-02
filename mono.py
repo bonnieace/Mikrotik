@@ -198,9 +198,9 @@ async def ping_routers_endpoint(router_id: Optional[int] = None):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/active_users", dependencies=[Depends(authenticate)])
-async def get_active_users_endpoint(router_id: Optional[int] = None):
-    """Return currently active hotspot and PPPoE sessions from one or all configured routers."""
+@app.get("/active_users/hotspot", dependencies=[Depends(authenticate)])
+async def get_active_hotspot_users_endpoint(router_id: Optional[int] = None):
+    """Return currently active hotspot sessions from one or all configured routers."""
     try:
         hotspot_active = get_hotspot_active_users(router_id=router_id)
     except HTTPException:
@@ -208,20 +208,25 @@ async def get_active_users_endpoint(router_id: Optional[int] = None):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    pppoe_available = True
+    return {
+        "generated_at": datetime.utcnow().isoformat(),
+        "hotspot_active": hotspot_active,
+    }
+
+
+@app.get("/active_users/pppoe", dependencies=[Depends(authenticate)])
+async def get_active_pppoe_users_endpoint(router_id: Optional[int] = None):
+    """Return currently active PPPoE sessions from one or all configured routers."""
     try:
         pppoe_active = get_ppp_active_users(router_id=router_id)
     except HTTPException:
         raise
     except Exception as e:
-        pppoe_available = False
-        pppoe_active = []
+        raise HTTPException(status_code=400, detail=str(e))
 
     return {
         "generated_at": datetime.utcnow().isoformat(),
-        "hotspot_active": hotspot_active,
         "pppoe_active": pppoe_active,
-        "pppoe_available": pppoe_available,
     }
 
 # To run: uvicorn mono:app --host 0.0.0.0 --port 8000 --reload
