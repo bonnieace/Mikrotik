@@ -22,10 +22,10 @@ def _connect_to_router_by_id(router_id: int):
                 host=router.ip_address,
                 port=router.port,
             )
-        except Exception:
+        except Exception as e:
             raise HTTPException(
                 status_code=500,
-                detail=f"Could not connect to router {router_id}. Check that the router is reachable and the API service is enabled.",
+                detail=f"Could not connect to router {router_id}. Check that the router is reachable and the API service is enabled. Error: {e}",
             )
     finally:
         db.close()
