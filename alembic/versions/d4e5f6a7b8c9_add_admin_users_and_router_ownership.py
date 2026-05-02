@@ -82,7 +82,7 @@ def upgrade():
     )
 
     # 6. Make owner_id NOT NULL
-    op.alter_column('routers', 'owner_id', nullable=False)
+    op.alter_column('routers', 'owner_id', existing_type=sa.Integer(), nullable=False)
 
 
 def downgrade():
