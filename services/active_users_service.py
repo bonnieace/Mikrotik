@@ -34,8 +34,8 @@ def get_hotspot_active_users(router_id: Optional[int] = None) -> List[dict]:
                    across all routers stored in the database.
 
     Returns:
-        List of active session dicts, each containing router identifier, user/login
-        name, IP address, MAC address, uptime, and session metadata.
+        List of active session dicts containing only data returned by the router:
+        user/login name, IP address, MAC address, uptime, and session metadata.
     """
     db = SessionLocal()
     try:
@@ -56,8 +56,6 @@ def get_hotspot_active_users(router_id: Optional[int] = None) -> List[dict]:
                 sessions = list(resource)
                 for session in sessions:
                     results.append({
-                        "router_id": router.id,
-                        "router_name": router.name,
                         "user": session.get("user", ""),
                         "address": session.get("address", ""),
                         "mac_address": session.get("mac-address", ""),
@@ -69,12 +67,8 @@ def get_hotspot_active_users(router_id: Optional[int] = None) -> List[dict]:
             except HTTPException:
                 raise
             except Exception as e:
-                # Record per-router errors so remaining routers can still be queried.
-                results.append({
-                    "router_id": router.id,
-                    "router_name": router.name,
-                    "error": str(e),
-                })
+                # Skip routers that are unreachable so others can still be queried.
+                pass
         return results
     except HTTPException:
         raise
@@ -93,8 +87,8 @@ def get_ppp_active_users(router_id: Optional[int] = None) -> List[dict]:
                    across all routers stored in the database.
 
     Returns:
-        List of active PPP session dicts, each containing router identifier, username,
-        IP address, caller ID, uptime, and session metadata.
+        List of active PPP session dicts containing only data returned by the router:
+        username, IP address, caller ID, uptime, and session metadata.
     """
     db = SessionLocal()
     try:
@@ -115,8 +109,6 @@ def get_ppp_active_users(router_id: Optional[int] = None) -> List[dict]:
                 sessions = list(resource)
                 for session in sessions:
                     results.append({
-                        "router_id": router.id,
-                        "router_name": router.name,
                         "user": session.get("name", ""),
                         "address": session.get("address", ""),
                         "caller_id": session.get("caller-id", ""),
@@ -128,12 +120,8 @@ def get_ppp_active_users(router_id: Optional[int] = None) -> List[dict]:
             except HTTPException:
                 raise
             except Exception as e:
-                # Record per-router errors so remaining routers can still be queried.
-                results.append({
-                    "router_id": router.id,
-                    "router_name": router.name,
-                    "error": str(e),
-                })
+                # Skip routers that are unreachable so others can still be queried.
+                pass
         return results
     except HTTPException:
         raise
