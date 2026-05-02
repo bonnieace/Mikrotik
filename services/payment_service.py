@@ -25,21 +25,20 @@ CONSUMER_SECRET = "ouz2P5YwOAKoRBnyJj8UVAIS8fZhqALYTM5NrUDG0Pu5Y5L8KdYw8z0TcFzdI
 
 async def initiate_stk_push(phone_number: str, amount: int, router_id: int):
     db = SessionLocal()
-    api = connect_to_router(router_id)
-
-
     try:
+        api = connect_to_router(router_id)
+
         # Generate OAuth token
         auth_url = f"{BASE_URL}/oauth/v1/generate?grant_type=client_credentials"
         async with httpx.AsyncClient() as client:
             auth_response = await client.get(auth_url, auth=(CONSUMER_KEY, CONSUMER_SECRET))
         if auth_response.status_code != 200:
-            create_log(db, description=f"Failed to generate access token for {phone_number}", phone_number=phone_number)
+            create_log(db, description=f"Failed to generate access token for {phone_number}", phone_number=phone_number, router_id=router_id)
             raise Exception("Failed to generate access token")
         
         access_token = auth_response.json().get("access_token")
         if not access_token:
-            create_log(db, description=f"Access token missing for {phone_number}", phone_number=phone_number)
+            create_log(db, description=f"Access token missing for {phone_number}", phone_number=phone_number, router_id=router_id)
             raise Exception("Access token missing in response")
         
         # Initiate STK Push
@@ -65,14 +64,16 @@ async def initiate_stk_push(phone_number: str, amount: int, router_id: int):
 
         if stk_response.status_code != 200:
             error_detail = stk_response.json()
-            create_log(db, description=f"STK Push failed for {phone_number}: {error_detail}", phone_number=phone_number)
+            create_log(db, description=f"STK Push failed for {phone_number}: {error_detail}", phone_number=phone_number, router_id=router_id)
             raise Exception("STK push failed")
 
         response_data = stk_response.json()
         checkout_request_id = response_data.get("CheckoutRequestID")
         if not checkout_request_id:
-            create_log(db, description=f"Missing CheckoutRequestID for {phone_number}", phone_number=phone_number)
+            create_log(db, description=f"Missing CheckoutRequestID for {phone_number}", phone_number=phone_number, router_id=router_id)
             raise Exception("Missing CheckoutRequestID in response")
+
+        create_log(db, description=f"STK Push initiated for {phone_number}, amount={amount}, CheckoutRequestID={checkout_request_id}", phone_number=phone_number, router_id=router_id)
 
         # Wait and check payment status multiple times
         max_attempts = 6  # Will try 6 times over 60 seconds
@@ -125,7 +126,7 @@ async def initiate_stk_push(phone_number: str, amount: int, router_id: int):
 
                         )
                     except Exception as e:
-                        create_log(db, description=f"Failed to add hotspot user {username} to MikroTik: {str(e)}", phone_number=phone_number)
+                        create_log(db, description=f"Failed to add hotspot user {username} to MikroTik: {str(e)}", phone_number=phone_number, router_id=router_id)
                         raise HTTPException(status_code=400, detail=str(e))
                     
                     
@@ -134,9 +135,9 @@ async def initiate_stk_push(phone_number: str, amount: int, router_id: int):
                     # Create hotspot user
                     hotspot_user = create_hotspot_user(db, phone_number=phone_number, amount=amount, otp=username, router_id=router_id)
                     # Log payment
-                    create_payment(db, invoice=checkout_request_id, amount=amount, user_type="hotspot", user_id=hotspot_user.id)
+                    create_payment(db, invoice=checkout_request_id, amount=amount, user_type="hotspot", user_id=hotspot_user.id, router_id=router_id)
                     # Log success
-                    create_log(db, description=f"Payment successful for user {username}", phone_number=phone_number)
+                    create_log(db, description=f"Payment successful for user {username}", phone_number=phone_number, router_id=router_id)
 
                     return {
                         "status": "success",
@@ -148,12 +149,12 @@ async def initiate_stk_push(phone_number: str, amount: int, router_id: int):
                     }
                 
                 elif result_code != "1032":  # 1032 typically means "Request cancelled by user" or "pending"
-                    create_log(db, description=f"Payment failed for {phone_number}: {response_data.get('ResultDesc')}", phone_number=phone_number)
+                    create_log(db, description=f"Payment failed for {phone_number}: {response_data.get('ResultDesc')}", phone_number=phone_number, router_id=router_id)
                     raise Exception("Payment failed or was cancelled")
             
             # If we're on the last attempt
             if attempt == max_attempts - 1:
-                create_log(db, description=f"Payment timeout for {phone_number}", phone_number=phone_number)
+                create_log(db, description=f"Payment timeout for {phone_number}", phone_number=phone_number, router_id=router_id)
                 raise Exception("Payment timeout - please try again or check your M-PESA for any completed transaction")
     finally:
         db.close()
@@ -177,6 +178,8 @@ def get_payments():
     except Exception as e:
         crud.create_log(db, description=f"Failed to get payments: {str(e)}", phone_number=None)
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()
     
 #read payments by user type service
 def get_payments_by_user_type(user_type: str):
@@ -198,6 +201,8 @@ def get_payments_by_user_type(user_type: str):
     except Exception as e:
         crud.create_log(db, description=f"Failed to get payments: {str(e)}", phone_number=None)
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()
     
 #return total payment for by user type
 def get_total_payment_by_user_type(user_type: str):
@@ -211,14 +216,16 @@ def get_total_payment_by_user_type(user_type: str):
     except Exception as e:
         crud.create_log(db, description=f"Failed to get payments: {str(e)}", phone_number=None)
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()
 #read payment totals for the current day by user type
 def get_total_payment_for_today_by_user_type(user_type: str):
     db = SessionLocal()
     try:
-    
-        payments = crud.get_payment_totals_for_today_by_user_type(db, user_type )
-        
+        payments = crud.get_payment_totals_for_today_by_user_type(db, user_type)
         return payments
     except Exception as e:
         crud.create_log(db, description=f"Failed to get today's payments: {str(e)}", phone_number=None)
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()

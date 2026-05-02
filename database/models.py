@@ -21,6 +21,7 @@ class Payment(Base):
     user_type = Column(String(50), nullable=False)
     user_id = Column(Integer, nullable=False)
     package_id = Column(Integer, ForeignKey("packages.id"), nullable=True)
+    router_id = Column(Integer, ForeignKey("routers.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -30,7 +31,7 @@ class Log(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
     description = Column(Text, nullable=False)
     phone_number = Column(String(20), nullable=True)
-    #router_id = Column(Integer, ForeignKey("routers.id"), nullable=True)
+    router_id = Column(Integer, ForeignKey("routers.id"), nullable=True)
 
 class Router(Base):
     __tablename__ = "routers"

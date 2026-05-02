@@ -10,7 +10,7 @@ def create_router(name: str, ip_address: str, port: int, username: str, password
     db = SessionLocal()
     try:
         router = crud.create_router(db, name, ip_address, port, username, password)
-        crud.create_log(db, description=f"Router '{name}' ({ip_address}:{port}) created")
+        crud.create_log(db, description=f"Router '{name}' ({ip_address}:{port}) created", router_id=router.id)
         return {
             "id": router.id,
             "name": router.name,

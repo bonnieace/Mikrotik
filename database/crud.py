@@ -23,16 +23,16 @@ def create_hotspot_user(db: Session, phone_number: str, amount: float, otp: str,
     return db_user
 
 # Payment CRUD
-def create_payment(db: Session, invoice: str, amount: float, user_type: str, user_id: int):
-    db_payment = Payment(invoice=invoice, amount=amount, user_type=user_type, user_id=user_id)
+def create_payment(db: Session, invoice: str, amount: float, user_type: str, user_id: int, router_id: int = None):
+    db_payment = Payment(invoice=invoice, amount=amount, user_type=user_type, user_id=user_id, router_id=router_id)
     db.add(db_payment)
     db.commit()
     db.refresh(db_payment)
     return db_payment
 
 # Log CRUD
-def create_log(db: Session, description: str, phone_number: str = None):
-    db_log = Log(description=description, phone_number=phone_number)
+def create_log(db: Session, description: str, phone_number: str = None, router_id: int = None):
+    db_log = Log(description=description, phone_number=phone_number, router_id=router_id)
     db.add(db_log)
     db.commit()
     db.refresh(db_log)
@@ -74,8 +74,11 @@ def get_packages(db: Session):
     return db.query(Package).all()
 
 #read all hotspot users
-def get_hotspot_users(db: Session):
-    return db.query(HotspotUser).all()
+def get_hotspot_users(db: Session, router_id: int = None):
+    query = db.query(HotspotUser)
+    if router_id is not None:
+        query = query.filter(HotspotUser.router_id == router_id)
+    return query.all()
 
 #create ppp user
 def create_ppp_user(db: Session, name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str, router_id: int = None):
@@ -86,8 +89,11 @@ def create_ppp_user(db: Session, name,email,pppoe_username,pppoe_password,mobile
     return db_ppp_user
 
 #get ppp users
-def get_ppp_users(db: Session):
-    return db.query(PPPUser).all()
+def get_ppp_users(db: Session, router_id: int = None):
+    query = db.query(PPPUser)
+    if router_id is not None:
+        query = query.filter(PPPUser.router_id == router_id)
+    return query.all()
 
 # Router CRUD
 def create_router(db: Session, name: str, ip_address: str, port: int, username: str, password: str):

@@ -104,9 +104,9 @@ async def get_total_payment_by_user_type_endpoint(user_type: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/hotspot_users", dependencies=[Depends(authenticate)])
-async def get_hotspot_users_endpoint():
+async def get_hotspot_users_endpoint(router_id: Optional[int] = None):
     try:
-        return get_hotspot_users()
+        return get_hotspot_users(router_id=router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -118,9 +118,9 @@ async def get_logs_endpoint():
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/log", dependencies=[Depends(authenticate)])
-async def create_log_endpoint(description: str, phone_number: str = None):
+async def create_log_endpoint(description: str, phone_number: str = None, router_id: int = None):
     try:
-        return create_log(description, phone_number)
+        return create_log(description, phone_number, router_id=router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -145,9 +145,9 @@ async def create_ppp_user_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/ppp_users", dependencies=[Depends(authenticate)])
-async def get_ppp_users_endpoint():
+async def get_ppp_users_endpoint(router_id: Optional[int] = None):
     try:
-        return get_ppp_users()
+        return get_ppp_users(router_id=router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

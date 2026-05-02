@@ -7,10 +7,10 @@ from fastapi import HTTPException
 from services.mikrotik_service import connect_to_router
 import httpx
 #get all hotspot users service
-def get_hotspot_users():
+def get_hotspot_users(router_id: int = None):
     db = SessionLocal()
     try:
-        hotspot_users = crud.get_hotspot_users(db)
+        hotspot_users = crud.get_hotspot_users(db, router_id=router_id)
         hotspot_user_list = []
         for hotspot_user in hotspot_users:
             hotspot_user_list.append({
@@ -19,7 +19,8 @@ def get_hotspot_users():
                 "amount": hotspot_user.amount,
                 "otp": hotspot_user.otp,
                 "expires_at": hotspot_user.expires_at,
-                "created_at": hotspot_user.created_at
+                "created_at": hotspot_user.created_at,
+                "router_id": hotspot_user.router_id
             })
         return hotspot_user_list
     except Exception as e:
@@ -54,7 +55,7 @@ def create_hotspot_user(phone_number: str, amount: int, otp: str, router_id: int
 
         )
         hotspot_user=crud.create_hotspot_user(db,phone_number=phone_number,amount=amount,otp=otp,router_id=router_id)
-        crud.create_log(db, description=f"Hotspot User {phone_number} created", phone_number=phone_number)
+        crud.create_log(db, description=f"Hotspot User {phone_number} created", phone_number=phone_number, router_id=router_id)
         #return user details
         return {
             "phone_number": hotspot_user.phone_number,
@@ -64,7 +65,7 @@ def create_hotspot_user(phone_number: str, amount: int, otp: str, router_id: int
             "created_at": hotspot_user.created_at
         }
     except Exception as e:
-        crud.create_log(db, description=f"Failed to create hotspot user: {str(e)}", phone_number=phone_number)
+        crud.create_log(db, description=f"Failed to create hotspot user: {str(e)}", phone_number=phone_number, router_id=router_id)
         raise HTTPException(status_code=400, detail=str(e))
     finally:
         db.close()

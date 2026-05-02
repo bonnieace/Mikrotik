@@ -21,7 +21,7 @@ def create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,locat
         )
 
         ppp_user = crud.create_ppp_user(db, name, email, pppoe_username, pppoe_password, mobile_number, location, apartment, profile, router_id=router_id)
-        crud.create_log(db, description=f"PPP User {name} created", phone_number=None)
+        crud.create_log(db, description=f"PPP User {name} created", phone_number=None, router_id=router_id)
         return {
             "name": ppp_user.name,
             "email": ppp_user.email,
@@ -32,16 +32,16 @@ def create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,locat
             "profile": ppp_user.profile,
         }
     except Exception as e:
-        crud.create_log(db, description=f"Failed to create PPP User {name}: {str(e)}", phone_number=None)
+        crud.create_log(db, description=f"Failed to create PPP User {name}: {str(e)}", phone_number=None, router_id=router_id)
         raise HTTPException(status_code=400, detail=str(e))
     finally:
         db.close()
 
 #read all ppp users service
-def get_ppp_users():
+def get_ppp_users(router_id: int = None):
     db = SessionLocal()
     try:
-        ppp_users = crud.get_ppp_users(db)
+        ppp_users = crud.get_ppp_users(db, router_id=router_id)
         ppp_user_list = []
         for ppp_user in ppp_users:
             ppp_user_list.append({
@@ -54,8 +54,8 @@ def get_ppp_users():
             "apartment": ppp_user.apartment,
             "profile": ppp_user.profile,
             "created_at":ppp_user.created_at,
-            "expires_on":ppp_user.expires_on
-                
+            "expires_on":ppp_user.expires_on,
+            "router_id": ppp_user.router_id
             })
         return ppp_user_list
     except Exception as e:
