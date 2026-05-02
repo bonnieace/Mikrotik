@@ -16,10 +16,10 @@ def create_log(description: str, phone_number: str = None, router_id: int = None
         db.close()
     
 #read all logs service
-def get_logs():
+def get_logs(router_id: int = None):
     db = SessionLocal()
     try:
-        logs = crud.get_logs(db)
+        logs = crud.get_logs(db, router_id=router_id)
         log_list = []
         for log in logs:
             log_list.append({

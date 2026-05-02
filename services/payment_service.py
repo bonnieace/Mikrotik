@@ -160,10 +160,10 @@ async def initiate_stk_push(phone_number: str, amount: int, router_id: int):
         db.close()
 
 #read all payments service
-def get_payments():
+def get_payments(router_id: int = None):
     db = SessionLocal()
     try:
-        payments = crud.get_payments(db)
+        payments = crud.get_payments(db, router_id=router_id)
         payment_list = []
         for payment in payments:
             payment_list.append({
@@ -182,10 +182,10 @@ def get_payments():
         db.close()
     
 #read payments by user type service
-def get_payments_by_user_type(user_type: str):
+def get_payments_by_user_type(user_type: str, router_id: int = None):
     db = SessionLocal()
     try:
-        payments = crud.get_payments_by_user_type(db, user_type)
+        payments = crud.get_payments_by_user_type(db, user_type, router_id=router_id)
         payment_list = []
         for payment in payments:
             payment_list.append({
@@ -205,10 +205,10 @@ def get_payments_by_user_type(user_type: str):
         db.close()
     
 #return total payment for by user type
-def get_total_payment_by_user_type(user_type: str):
+def get_total_payment_by_user_type(user_type: str, router_id: int = None):
     db = SessionLocal()
     try:
-        payments = crud.get_payments_by_user_type(db, user_type)
+        payments = crud.get_payments_by_user_type(db, user_type, router_id=router_id)
         total_payment = 0
         for payment in payments:
             total_payment += payment.amount
@@ -219,10 +219,10 @@ def get_total_payment_by_user_type(user_type: str):
     finally:
         db.close()
 #read payment totals for the current day by user type
-def get_total_payment_for_today_by_user_type(user_type: str):
+def get_total_payment_for_today_by_user_type(user_type: str, router_id: int = None):
     db = SessionLocal()
     try:
-        payments = crud.get_payment_totals_for_today_by_user_type(db, user_type)
+        payments = crud.get_payment_totals_for_today_by_user_type(db, user_type, router_id=router_id)
         return payments
     except Exception as e:
         crud.create_log(db, description=f"Failed to get today's payments: {str(e)}", phone_number=None)

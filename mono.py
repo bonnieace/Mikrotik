@@ -68,38 +68,39 @@ async def create_package_endpoint(
     description: str,
     price: float,
     service_type: str,
-    validity_days: int
+    validity_days: int,
+    router_id: int = None
 ):
     try:
-        return create_package(name, description, price, service_type, validity_days)
+        return create_package(name, description, price, service_type, validity_days, router_id=router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/packages", dependencies=[Depends(authenticate)])
-async def get_packages_endpoint():
+async def get_packages_endpoint(router_id: Optional[int] = None):
     try:
-        return get_packages()
+        return get_packages(router_id=router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/payments", dependencies=[Depends(authenticate)])
-async def get_payments_endpoint():
+async def get_payments_endpoint(router_id: Optional[int] = None):
     try:
-        return get_payments()
+        return get_payments(router_id=router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/payments/{user_type}", dependencies=[Depends(authenticate)])
-async def get_payments_by_user_type_endpoint(user_type: str):
+async def get_payments_by_user_type_endpoint(user_type: str, router_id: Optional[int] = None):
     try:
-        return get_payments_by_user_type(user_type)
+        return get_payments_by_user_type(user_type, router_id=router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/payments/total/{user_type}", dependencies=[Depends(authenticate)])
-async def get_total_payment_by_user_type_endpoint(user_type: str):
+async def get_total_payment_by_user_type_endpoint(user_type: str, router_id: Optional[int] = None):
     try:
-        return {"total_payment": get_total_payment_by_user_type(user_type)}
+        return {"total_payment": get_total_payment_by_user_type(user_type, router_id=router_id)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -111,9 +112,9 @@ async def get_hotspot_users_endpoint(router_id: Optional[int] = None):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/logs", dependencies=[Depends(authenticate)])
-async def get_logs_endpoint():
+async def get_logs_endpoint(router_id: Optional[int] = None):
     try:
-        return get_logs()
+        return get_logs(router_id=router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -166,9 +167,9 @@ async def fetch_rt_rx_data_endpoint(router_id: int):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/payments/today/total/{user_type}", dependencies=[Depends(authenticate)])
-async def get_today_total_payment_by_user_type_endpoint(user_type: str):
+async def get_today_total_payment_by_user_type_endpoint(user_type: str, router_id: Optional[int] = None):
     try:
-        return {"total_payment": get_total_payment_for_today_by_user_type(user_type)}
+        return {"total_payment": get_total_payment_for_today_by_user_type(user_type, router_id=router_id)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

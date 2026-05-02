@@ -40,38 +40,53 @@ def create_log(db: Session, description: str, phone_number: str = None, router_i
 
 
 #create package
-def create_package(db: Session, name: str, description: str, price: float, service_type: str, validity_days: int):
-    db_package = Package(name=name, description=description, price=price, service_type=service_type, validity_days=validity_days)
+def create_package(db: Session, name: str, description: str, price: float, service_type: str, validity_days: int, router_id: int = None):
+    db_package = Package(name=name, description=description, price=price, service_type=service_type, validity_days=validity_days, router_id=router_id)
     db.add(db_package)
     db.commit()
     db.refresh(db_package)
     return db_package
 
 #read all payments
-def get_payments(db: Session):
-    return db.query(Payment).all()
+def get_payments(db: Session, router_id: int = None):
+    query = db.query(Payment)
+    if router_id is not None:
+        query = query.filter(Payment.router_id == router_id)
+    return query.all()
 
 #read payments by user type
-def get_payments_by_user_type(db: Session, user_type: str):
-    return db.query(Payment).filter(Payment.user_type == user_type).all()
+def get_payments_by_user_type(db: Session, user_type: str, router_id: int = None):
+    query = db.query(Payment).filter(Payment.user_type == user_type)
+    if router_id is not None:
+        query = query.filter(Payment.router_id == router_id)
+    return query.all()
 
 #read payment totals for the current day by user type
-def get_payment_totals_for_today_by_user_type(db: Session, user_type: str):
+def get_payment_totals_for_today_by_user_type(db: Session, user_type: str, router_id: int = None):
     today = datetime.now().date()
-    payments = db.query(Payment).filter(
+    query = db.query(Payment).filter(
         Payment.user_type == user_type,
         Payment.created_at >= today
-    ).all()
+    )
+    if router_id is not None:
+        query = query.filter(Payment.router_id == router_id)
+    payments = query.all()
     total_amount = sum(payment.amount for payment in payments)
     return total_amount
 
 #read all logs
-def get_logs(db: Session):
-    return db.query(Log).all()
+def get_logs(db: Session, router_id: int = None):
+    query = db.query(Log)
+    if router_id is not None:
+        query = query.filter(Log.router_id == router_id)
+    return query.all()
 
 #read all packages
-def get_packages(db: Session):
-    return db.query(Package).all()
+def get_packages(db: Session, router_id: int = None):
+    query = db.query(Package)
+    if router_id is not None:
+        query = query.filter(Package.router_id == router_id)
+    return query.all()
 
 #read all hotspot users
 def get_hotspot_users(db: Session, router_id: int = None):

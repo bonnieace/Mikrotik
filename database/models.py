@@ -54,6 +54,7 @@ class Package(Base):
     price = Column(DECIMAL(10, 2), nullable=False)
     service_type = Column(String(50), nullable=False)
     validity_days = Column(Integer, nullable=False)
+    router_id = Column(Integer, ForeignKey("routers.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
