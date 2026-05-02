@@ -4,10 +4,22 @@ from database.session import SessionLocal
 from datetime import datetime
 from typing import List
 from fastapi import HTTPException
+from services.mikrotik_service import connect_to_router
+
 #create ppp user service
 def create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str, router_id: int):
     db = SessionLocal()
     try:
+        # Provision the PPP secret on the MikroTik router first
+        api = connect_to_router(router_id)
+        ppp_secrets = api.path("ppp", "secret")
+        ppp_secrets.add(
+            name=pppoe_username,
+            password=pppoe_password,
+            profile=profile,
+            service="pppoe",
+        )
+
         ppp_user = crud.create_ppp_user(db, name, email, pppoe_username, pppoe_password, mobile_number, location, apartment, profile, router_id=router_id)
         crud.create_log(db, description=f"PPP User {name} created", phone_number=None)
         return {
@@ -22,6 +34,8 @@ def create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,locat
     except Exception as e:
         crud.create_log(db, description=f"Failed to create PPP User {name}: {str(e)}", phone_number=None)
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()
 
 #read all ppp users service
 def get_ppp_users():

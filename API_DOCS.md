@@ -17,7 +17,8 @@ The application exposes two FastAPI apps:
 5. [Payments — M-PESA STK Push](#payments--m-pesa-stk-push)
 6. [PPP / PPPoE Clients](#ppp--pppoe-clients)
 7. [PPP Profiles](#ppp-profiles)
-8. [Static Files](#static-files)
+8. [Active Sessions](#active-sessions)
+9. [Static Files](#static-files)
 
 ---
 
@@ -489,6 +490,64 @@ These endpoints manage login accounts on the MikroTik router itself (not hotspot
 **Response `200`**
 ```json
 { "message": "PPP profile 'premium' successfully added." }
+```
+
+---
+
+## Active Sessions
+
+### `GET /active_users/hotspot`
+**Description:** Return currently active hotspot sessions from one or all configured routers.
+
+**Query Parameters**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `router_id` | integer | ❌ | If provided, only query this specific router |
+
+**Response `200`**
+```json
+{
+  "generated_at": "2026-05-02T06:00:00.000000",
+  "hotspot_active": [
+    {
+      "user": "user_123456",
+      "address": "192.168.88.10",
+      "mac_address": "AA:BB:CC:DD:EE:FF",
+      "uptime": "00:15:32",
+      "session_id": "*1",
+      "login_by": "mac",
+      "server": "hotspot1"
+    }
+  ]
+}
+```
+
+---
+
+### `GET /active_users/pppoe`
+**Description:** Return currently active PPPoE sessions from one or all configured routers.
+
+**Query Parameters**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `router_id` | integer | ❌ | If provided, only query this specific router |
+
+**Response `200`**
+```json
+{
+  "generated_at": "2026-05-02T06:00:00.000000",
+  "pppoe_active": [
+    {
+      "user": "client01",
+      "address": "10.0.0.2",
+      "caller_id": "AA:BB:CC:DD:EE:FF",
+      "uptime": "01:30:00",
+      "session_id": "*2",
+      "service": "pppoe",
+      "encoding": ""
+    }
+  ]
+}
 ```
 
 ---
