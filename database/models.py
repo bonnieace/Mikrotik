@@ -10,6 +10,7 @@ class HotspotUser(Base):
     otp = Column(String(50), nullable=True)
     expires_at = Column(DateTime, nullable=True)
     package_id = Column(Integer, ForeignKey("packages.id"), nullable=True)
+    router_id = Column(Integer, ForeignKey("routers.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Payment(Base):
@@ -69,6 +70,7 @@ class PPPUser(Base):
     location = Column(String(125), nullable=True)
     apartment = Column(String(125), nullable=True)
     package_id = Column(Integer, ForeignKey("packages.id"), nullable=True)
+    router_id = Column(Integer, ForeignKey("routers.id"), nullable=True)
     role = Column(String(125), nullable=False, default="ppp_user")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

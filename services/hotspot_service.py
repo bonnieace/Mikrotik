@@ -27,9 +27,9 @@ def get_hotspot_users():
         raise HTTPException(status_code=400, detail=str(e))
 
 #create hotspot user
-def create_hotspot_user(phone_number: str, amount: int, otp: str):
+def create_hotspot_user(phone_number: str, amount: int, otp: str, router_id: int):
     db = SessionLocal()
-    api=connect_to_router()
+    api = connect_to_router(router_id)
     try:
         if amount == 1:
             uptime = '1h'
@@ -53,7 +53,7 @@ def create_hotspot_user(phone_number: str, amount: int, otp: str):
             **({"limit-uptime": uptime} if uptime else {})
 
         )
-        hotspot_user=crud.create_hotspot_user(db,phone_number=phone_number,amount=amount,otp=otp)
+        hotspot_user=crud.create_hotspot_user(db,phone_number=phone_number,amount=amount,otp=otp,router_id=router_id)
         crud.create_log(db, description=f"Hotspot User {phone_number} created", phone_number=phone_number)
         #return user details
         return {

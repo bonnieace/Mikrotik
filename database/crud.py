@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from .models import HotspotUser, PPPUser, Payment, Log, Package, Router
 
 # Hotspot User CRUD
-def create_hotspot_user(db: Session, phone_number: str, amount: float, otp: str):
+def create_hotspot_user(db: Session, phone_number: str, amount: float, otp: str, router_id: int = None):
     """
     Create a new hotspot user.
     Save the provided OTP (which will be the username) into the `otp` field.
@@ -14,7 +14,8 @@ def create_hotspot_user(db: Session, phone_number: str, amount: float, otp: str)
         amount=amount,
         otp=otp , # Save the username as OTP
         expires_at=expires_at,
-        created_at=created_at
+        created_at=created_at,
+        router_id=router_id
     )
     db.add(db_user)
     db.commit()
@@ -77,8 +78,8 @@ def get_hotspot_users(db: Session):
     return db.query(HotspotUser).all()
 
 #create ppp user
-def create_ppp_user(db: Session, name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str,):
-    db_ppp_user = PPPUser(name=name,email=email,pppoe_password=pppoe_password,mobile_number=mobile_number,location=location,apartment=apartment,profile=profile,pppoe_username=pppoe_username)
+def create_ppp_user(db: Session, name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str, router_id: int = None):
+    db_ppp_user = PPPUser(name=name,email=email,pppoe_password=pppoe_password,mobile_number=mobile_number,location=location,apartment=apartment,profile=profile,pppoe_username=pppoe_username,router_id=router_id)
     db.add(db_ppp_user)
     db.commit()
     db.refresh(db_ppp_user)
@@ -104,6 +105,9 @@ def create_router(db: Session, name: str, ip_address: str, port: int, username: 
 
 def get_routers(db: Session):
     return db.query(Router).all()
+
+def get_router_by_id(db: Session, router_id: int):
+    return db.query(Router).filter(Router.id == router_id).first()
 
 from datetime import datetime, timedelta
 # Mapping of amount to duration

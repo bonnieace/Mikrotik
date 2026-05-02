@@ -1,25 +1,14 @@
 import asyncio
-import os
-import random
-import string
+import base64
 import time
-from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from librouteros import connect
 from librouteros.exceptions import TrapError
 from pydantic import BaseModel
 import httpx
-
-# Load environment variables
-load_dotenv()
-
-# MikroTik connection details
-MIKROTIK_HOST = os.getenv("MIKROTIK_HOST")
-MIKROTIK_PORT = int(os.getenv("MIKROTIK_PORT"))
-MIKROTIK_USER = os.getenv("MIKROTIK_USER")
-MIKROTIK_PASSWORD = os.getenv("MIKROTIK_PASSWORD")
+from services.mikrotik_service import connect_to_router
 
 # M-PESA credentials
+import os
 BASE_URL = "https://sandbox.safaricom.co.ke"
 CONSUMER_KEY = os.getenv("MPESA_CONSUMER_KEY")
 CONSUMER_SECRET = os.getenv("MPESA_CONSUMER_SECRET")
@@ -39,24 +28,12 @@ class RenewalRequest(BaseModel):
     amount: int  # Payment amount
 
 
-# Utility function to connect to MikroTik
-def connect_to_router():
-    try:
-        return connect(
-            username=MIKROTIK_USER,
-            password=MIKROTIK_PASSWORD,
-            host=MIKROTIK_HOST,
-            port=MIKROTIK_PORT,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Connection failed: {str(e)}")
-
 
 # Add PPP Client
 @app.post("/ppp/add")
-def add_ppp_client(client: PPPClient):
+def add_ppp_client(client: PPPClient, router_id: int):
     try:
-        api = connect_to_router()
+        api = connect_to_router(router_id)
         ppp_users = api.path("ppp", "secret")
         ppp_users.add(
             name=client.username,
@@ -73,7 +50,7 @@ def add_ppp_client(client: PPPClient):
 
 # Process Renewal
 @app.post("/ppp/renew")
-async def renew_ppp_client(request: RenewalRequest):
+async def renew_ppp_client(request: RenewalRequest, router_id: int):
     # Step 1: Generate M-PESA OAuth Token
     auth_url = f"{BASE_URL}/oauth/v1/generate?grant_type=client_credentials"
     async with httpx.AsyncClient() as client:
@@ -106,7 +83,7 @@ async def renew_ppp_client(request: RenewalRequest):
 
     # Step 3: Update PPP Client Limit
     try:
-        api = connect_to_router()
+        api = connect_to_router(router_id)
         ppp_users = api.path("ppp", "secret")
 
         # Determine new limit based on payment amount
@@ -128,10 +105,10 @@ async def renew_ppp_client(request: RenewalRequest):
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 # List PPP Clients
 @app.get("/ppp/clients")
-def list_ppp_clients():
+def list_ppp_clients(router_id: int):
     try:
         # Connect to MikroTik router
-        api = connect_to_router()
+        api = connect_to_router(router_id)
         ppp_users = api.path("ppp", "secret")
         
         # Retrieve all PPP clients
@@ -154,10 +131,10 @@ def list_ppp_clients():
 
 # List PPP active Clients
 @app.get("/ppp/clients/active")
-def list_ppp_clients():
+def list_active_ppp_clients(router_id: int):
     try:
         # Connect to MikroTik router
-        api = connect_to_router()
+        api = connect_to_router(router_id)
         ppp_users = api.path("ppp", "active")
         
         # Retrieve all PPP clients
@@ -180,10 +157,10 @@ def list_ppp_clients():
         
 # List available PPP profiles
 @app.get("/ppp/profiles")
-def list_ppp_profiles():
+def list_ppp_profiles(router_id: int):
     try:
         # Connect to MikroTik router
-        api = connect_to_router()
+        api = connect_to_router(router_id)
         ppp_profiles = api.path("ppp", "profile")
         
         # Retrieve all profiles
@@ -208,14 +185,15 @@ def list_ppp_profiles():
 # Add a PPP profile
 @app.post("/ppp/profiles")
 def add_ppp_profile(
-    name: str, 
-    rate_limit: str = None, 
-    local_address: str = None, 
+    name: str,
+    router_id: int,
+    rate_limit: str = None,
+    local_address: str = None,
     remote_address: str = None
 ):
     try:
         # Connect to MikroTik router
-        api = connect_to_router()
+        api = connect_to_router(router_id)
         
         # Add a new profile
         api.path("ppp", "profile").add(
@@ -232,9 +210,9 @@ def add_ppp_profile(
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
     
 @app.post("/ppp/clients/login")
-def ppp_client_login(name: str, password: str):
+def ppp_client_login(name: str, password: str, router_id: int):
     try:
-        api = connect_to_router()
+        api = connect_to_router(router_id)
         ppp_clients = api.path("ppp", "secret")
 
         # Find the client by name

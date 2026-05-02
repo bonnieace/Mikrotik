@@ -23,9 +23,9 @@ def _generate_mpesa_password(timestamp: str) -> str:
 CONSUMER_KEY = "YJwAugvyRWklll798WT0CRP60IlaC4GsmXaDaG3tESRzJzfF"
 CONSUMER_SECRET = "ouz2P5YwOAKoRBnyJj8UVAIS8fZhqALYTM5NrUDG0Pu5Y5L8KdYw8z0TcFzdI0Nn"
 
-async def initiate_stk_push(phone_number: str, amount: int):
+async def initiate_stk_push(phone_number: str, amount: int, router_id: int):
     db = SessionLocal()
-    api = connect_to_router()
+    api = connect_to_router(router_id)
 
 
     try:
@@ -132,7 +132,7 @@ async def initiate_stk_push(phone_number: str, amount: int):
                     
                     
                     # Create hotspot user
-                    hotspot_user = create_hotspot_user(db, phone_number=phone_number, amount=amount,otp=username)
+                    hotspot_user = create_hotspot_user(db, phone_number=phone_number, amount=amount, otp=username, router_id=router_id)
                     # Log payment
                     create_payment(db, invoice=checkout_request_id, amount=amount, user_type="hotspot", user_id=hotspot_user.id)
                     # Log success

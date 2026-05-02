@@ -43,9 +43,9 @@ app.add_middleware(
 
 # --- Public Endpoints ---
 @app.post("/stkpush/initiate")
-async def initiate_stk_push_endpoint(phone_number: str, amount: int):
+async def initiate_stk_push_endpoint(phone_number: str, amount: int, router_id: int):
     try:
-        return await initiate_stk_push(phone_number, amount)
+        return await initiate_stk_push(phone_number, amount, router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -132,12 +132,13 @@ async def create_ppp_user_endpoint(
     mobile_number: str,
     location: str,
     apartment: str,
-    profile: str
+    profile: str,
+    router_id: int
 ):
     try:
         return create_ppp_user(
             name, email, pppoe_username, pppoe_password,
-            mobile_number, location, apartment, profile
+            mobile_number, location, apartment, profile, router_id
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -150,16 +151,16 @@ async def get_ppp_users_endpoint():
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/hotspot_user", dependencies=[Depends(authenticate)])
-async def create_hotspot_user_endpoint(phone_number: str, amount: int, otp: str):
+async def create_hotspot_user_endpoint(phone_number: str, amount: int, otp: str, router_id: int):
     try:
-        return create_hotspot_user(phone_number, amount, otp)
+        return create_hotspot_user(phone_number, amount, otp, router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/rt_rx_data", dependencies=[Depends(authenticate)])
-async def fetch_rt_rx_data_endpoint():
+async def fetch_rt_rx_data_endpoint(router_id: int):
     try:
-        return fetch_rt_rx_tx_data()
+        return fetch_rt_rx_tx_data(router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

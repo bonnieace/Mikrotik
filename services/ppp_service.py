@@ -5,10 +5,10 @@ from datetime import datetime
 from typing import List
 from fastapi import HTTPException
 #create ppp user service
-def create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str):
+def create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str, router_id: int):
     db = SessionLocal()
     try:
-        ppp_user = crud.create_ppp_user(db, name, email, pppoe_username, pppoe_password, mobile_number, location, apartment, profile)
+        ppp_user = crud.create_ppp_user(db, name, email, pppoe_username, pppoe_password, mobile_number, location, apartment, profile, router_id=router_id)
         crud.create_log(db, description=f"PPP User {name} created", phone_number=None)
         return {
             "name": ppp_user.name,
