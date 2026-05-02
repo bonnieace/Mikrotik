@@ -8,15 +8,13 @@ Create Date: 2026-05-02 00:00:00.000000
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect as sa_inspect
-from passlib.context import CryptContext
+import bcrypt
 
 # revision identifiers, used by Alembic.
 revision = 'd4e5f6a7b8c9'
 down_revision = 'c3d4e5f6a7b8'
 branch_labels = None
 depends_on = None
-
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def _table_exists(name):
@@ -54,7 +52,7 @@ def upgrade():
     conn = op.get_bind()
     existing = conn.execute(sa.text("SELECT id FROM admin_users WHERE username = 'admin' LIMIT 1")).fetchone()
     if not existing:
-        hashed_pw = _pwd_context.hash("secret")
+        hashed_pw = bcrypt.hashpw(b"secret", bcrypt.gensalt()).decode("utf-8")
         conn.execute(
             sa.text(
                 "INSERT INTO admin_users (username, email, hashed_password, role, is_active, created_at) "
