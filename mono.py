@@ -199,10 +199,10 @@ async def ping_routers_endpoint(router_id: Optional[int] = None):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/active_users/hotspot", dependencies=[Depends(authenticate)])
-async def get_active_hotspot_users_endpoint(router_id: Optional[int] = None):
-    """Return currently active hotspot sessions from one or all configured routers."""
+async def get_active_hotspot_users_endpoint():
+    """Return currently active hotspot sessions from the router configured in env."""
     try:
-        hotspot_active = get_hotspot_active_users(router_id=router_id)
+        hotspot_active = get_hotspot_active_users()
     except HTTPException:
         raise
     except Exception as e:
@@ -215,10 +215,10 @@ async def get_active_hotspot_users_endpoint(router_id: Optional[int] = None):
 
 
 @app.get("/active_users/pppoe", dependencies=[Depends(authenticate)])
-async def get_active_pppoe_users_endpoint(router_id: Optional[int] = None):
-    """Return currently active PPPoE sessions from one or all configured routers."""
+async def get_active_pppoe_users_endpoint():
+    """Return currently active PPPoE sessions from the router configured in env."""
     try:
-        pppoe_active = get_ppp_active_users(router_id=router_id)
+        pppoe_active = get_ppp_active_users()
     except HTTPException:
         raise
     except Exception as e:
