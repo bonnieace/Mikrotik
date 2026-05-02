@@ -506,9 +506,7 @@ async def initiate_stk_push_endpoint(
     phone_number: str,
     amount: int,
     router_id: int,
-    current_user: AdminUser = Depends(_get_current_user),
 ):
-    _validate_router_access(router_id, current_user)
     try:
         return await initiate_stk_push(phone_number, amount, router_id)
     except Exception as e:
