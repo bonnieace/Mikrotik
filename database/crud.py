@@ -135,6 +135,25 @@ def get_routers(db: Session, owner_id: Optional[int] = None):
 def get_router_by_id(db: Session, router_id: int):
     return db.query(Router).filter(Router.id == router_id).first()
 
+def update_router(db: Session, router_id: int, **kwargs):
+    router = db.query(Router).filter(Router.id == router_id).first()
+    if router is None:
+        return None
+    for key, value in kwargs.items():
+        if value is not None:
+            setattr(router, key, value)
+    db.commit()
+    db.refresh(router)
+    return router
+
+def delete_router(db: Session, router_id: int):
+    router = db.query(Router).filter(Router.id == router_id).first()
+    if router is None:
+        return False
+    db.delete(router)
+    db.commit()
+    return True
+
 # AdminUser CRUD
 def create_admin_user(db: Session, username: str, hashed_password: str, role: str = "isp", email: str = None):
     db_user = AdminUser(

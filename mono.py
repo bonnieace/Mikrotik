@@ -25,7 +25,7 @@ from services.payment_service import (
     initiate_stk_push,
 )
 from services.ppp_service import create_ppp_user, get_ppp_users
-from services.router_service import create_router, get_routers, ping_routers
+from services.router_service import create_router, delete_router, get_routers, ping_routers, update_router
 
 # ---------------------------------------------------------------------------
 # Config
@@ -222,6 +222,35 @@ async def get_routers_endpoint(current_user: AdminUser = Depends(_get_current_us
     try:
         owner_id = None if current_user.role == "superadmin" else current_user.id
         return get_routers(owner_id=owner_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/router/{router_id}")
+async def update_router_endpoint(
+    router_id: int,
+    name: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    port: Optional[int] = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
+    current_user: AdminUser = Depends(_get_current_user),
+):
+    _validate_router_access(router_id, current_user)
+    try:
+        return update_router(router_id, name=name, ip_address=ip_address, port=port, username=username, password=password)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/router/{router_id}")
+async def delete_router_endpoint(
+    router_id: int,
+    current_user: AdminUser = Depends(_get_current_user),
+):
+    _validate_router_access(router_id, current_user)
+    try:
+        return delete_router(router_id)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

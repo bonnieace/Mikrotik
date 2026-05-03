@@ -48,6 +48,47 @@ def get_routers(owner_id: Optional[int] = None):
         db.close()
 
 
+def update_router(router_id: int, name: str = None, ip_address: str = None, port: int = None, username: str = None, password: str = None):
+    db = SessionLocal()
+    try:
+        router = crud.get_router_by_id(db, router_id)
+        if router is None:
+            raise HTTPException(status_code=404, detail=f"Router with id {router_id} not found")
+        updated = crud.update_router(db, router_id, name=name, ip_address=ip_address, port=port, username=username, password=password)
+        crud.create_log(db, description=f"Router '{updated.name}' ({updated.ip_address}:{updated.port}) updated", router_id=router_id)
+        return {
+            "id": updated.id,
+            "name": updated.name,
+            "ip_address": updated.ip_address,
+            "port": updated.port,
+            "username": updated.username,
+            "owner_id": updated.owner_id,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()
+
+
+def delete_router(router_id: int):
+    db = SessionLocal()
+    try:
+        router = crud.get_router_by_id(db, router_id)
+        if router is None:
+            raise HTTPException(status_code=404, detail=f"Router with id {router_id} not found")
+        name = router.name
+        crud.delete_router(db, router_id)
+        return {"detail": f"Router '{name}' deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        db.close()
+
+
 def ping_routers(router_id: Optional[int] = None, allowed_ids=None, timeout: float = 2.0):
     db = SessionLocal()
     try:
