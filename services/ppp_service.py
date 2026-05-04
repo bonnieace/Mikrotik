@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from services.mikrotik_service import connect_to_router
 
 #create ppp user service
-def create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str, router_id: int):
+def create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str, router_id: int, validity_days: int = None):
     db = SessionLocal()
     try:
         # Provision the PPP secret on the MikroTik router first
@@ -20,7 +20,7 @@ def create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,locat
             service="pppoe",
         )
 
-        ppp_user = crud.create_ppp_user(db, name, email, pppoe_username, pppoe_password, mobile_number, location, apartment, profile, router_id=router_id)
+        ppp_user = crud.create_ppp_user(db, name, email, pppoe_username, pppoe_password, mobile_number, location, apartment, profile, router_id=router_id, validity_days=validity_days)
         crud.create_log(db, description=f"PPP User {name} created", phone_number=None, router_id=router_id)
         return {
             "name": ppp_user.name,
@@ -30,6 +30,7 @@ def create_ppp_user(name,email,pppoe_username,pppoe_password,mobile_number,locat
             "location": ppp_user.location,
             "apartment": ppp_user.apartment,
             "profile": ppp_user.profile,
+            "expires_on": ppp_user.expires_on,
         }
     except Exception as e:
         crud.create_log(db, description=f"Failed to create PPP User {name}: {str(e)}", phone_number=None, router_id=router_id)

@@ -436,11 +436,12 @@ async def create_ppp_user_endpoint(
     apartment: str,
     profile: str,
     router_id: int,
+    validity_days: Optional[int] = None,
     current_user: AdminUser = Depends(_get_current_user),
 ):
     _validate_router_access(router_id, current_user)
     try:
-        return create_ppp_user(name, email, pppoe_username, pppoe_password, mobile_number, location, apartment, profile, router_id)
+        return create_ppp_user(name, email, pppoe_username, pppoe_password, mobile_number, location, apartment, profile, router_id, validity_days=validity_days)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

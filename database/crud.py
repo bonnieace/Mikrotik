@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from .models import HotspotUser, PPPUser, Payment, Log, Package, Router, AdminUser
 from typing import Optional
-
+from datetime import datetime, timedelta
 # Hotspot User CRUD
 def create_hotspot_user(db: Session, phone_number: str, amount: float, otp: str, router_id: int = None):
     """
@@ -97,8 +97,9 @@ def get_hotspot_users(db: Session, router_id: Optional[int] = None):
     return query.all()
 
 #create ppp user
-def create_ppp_user(db: Session, name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str, router_id: int = None):
-    db_ppp_user = PPPUser(name=name,email=email,pppoe_password=pppoe_password,mobile_number=mobile_number,location=location,apartment=apartment,profile=profile,pppoe_username=pppoe_username,router_id=router_id)
+def create_ppp_user(db: Session, name,email,pppoe_username,pppoe_password,mobile_number,location,apartment,profile: str, router_id: int = None, validity_days: int = None):
+    expires_on = datetime.now() + timedelta(days=validity_days) if validity_days else None
+    db_ppp_user = PPPUser(name=name,email=email,pppoe_password=pppoe_password,mobile_number=mobile_number,location=location,apartment=apartment,profile=profile,pppoe_username=pppoe_username,router_id=router_id,expires_on=expires_on)
     db.add(db_ppp_user)
     db.commit()
     db.refresh(db_ppp_user)
@@ -176,10 +177,10 @@ def get_admin_user_by_id(db: Session, user_id: int):
 def list_admin_users(db: Session):
     return db.query(AdminUser).all()
 
-from datetime import datetime, timedelta
 # Mapping of amount to duration
 UPTIME_MAPPING = {
     1: "1h",    # 1 hour
+    10: "1h",   # 1 hour (used by payment flow)
     50: "1d",   # 1 day
     150: "3d",  # 3 days
     300: "1w",  # 1 week
