@@ -31,7 +31,8 @@ def test_onboarding_is_safe_scoped_and_idempotent(db, monkeypatch):
     assert "/system backup save" in script
     assert "add-default-route=no" in script
     assert "use-peer-dns=no" in script
-    assert "allow=pap" in script
+    assert "allow=mschap2" in script
+    assert "allow=pap" not in script
     assert "uzanet-managed" in script
     assert "reset-configuration" not in script
     assert response["l2tp_peer"]["password"] not in repr(response["router"])

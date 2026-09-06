@@ -68,7 +68,7 @@ Keep API documentation disabled in production unless operators need it: `ENABLE_
 4. Confirm the router changes to `claimed`, then run an authenticated status check.
 5. Create RouterOS profiles matching each Uzanet plan's `router_profile` before selling that plan.
 
-The compatibility profile deliberately uses L2TP/PAP without IPsec, as required for legacy RouterOS support. It must therefore terminate inside a protected management underlay with strict source ACLs; never expose RouterOS API port 8728 to the public Internet. IPsec or WireGuard should be the next transport upgrade for capable routers.
+The compatibility profile uses L2TP with MS-CHAPv2 and no IPsec to match the deployed `xl2tpd`/PPPd concentrator. It must terminate inside a protected management underlay with strict source ACLs; never expose RouterOS API port 8728 to the public Internet. IPsec or WireGuard should be the next transport upgrade for capable routers.
 
 The API generates but does not install the matching L2TP peer on an external VPN/RADIUS server. Automating that peer lifecycle is a deployment integration, not an API-side assumption.
 

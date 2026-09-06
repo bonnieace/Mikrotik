@@ -78,7 +78,7 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
     :error "Uzanet onboarding stopped: conflicting l2tp-client named uzanet-control"
   }}
 }} else={{
-  /interface l2tp-client add name=$tunnelName comment=$managedComment connect-to="{values['host']}" user="{values['l2tp_user']}" password="{values['l2tp_password']}" allow=pap add-default-route=no use-peer-dns=no disabled=no
+  /interface l2tp-client add name=$tunnelName comment=$managedComment connect-to="{values['host']}" user="{values['l2tp_user']}" password="{values['l2tp_password']}" allow=mschap2 add-default-route=no use-peer-dns=no disabled=no
 }}
 
 :local existingGroup [/user group find where name=$groupName]
