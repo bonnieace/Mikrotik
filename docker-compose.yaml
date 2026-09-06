@@ -33,8 +33,7 @@ services:
   jobs:
     build: .
     restart: unless-stopped
-    command: ["python", "jobs.py"]
-    entrypoint: []
+    entrypoint: ["python", "jobs.py"]
     env_file:
       - .env
     environment:
