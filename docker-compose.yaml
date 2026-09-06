@@ -24,6 +24,8 @@ services:
       - .env
     environment:
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-uzanet}:${MYSQL_PASSWORD}@db/${MYSQL_DATABASE:-uzanet}
+    volumes:
+      - /run/uzanet-vpn-agent:/run/uzanet-vpn-agent:ro
     depends_on:
       db:
         condition: service_healthy

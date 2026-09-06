@@ -39,6 +39,9 @@ class Settings:
     router_control_cidr: str
     router_allowed_cidrs: tuple[str, ...]
     onboarding_token_minutes: int
+    vpn_agent_socket: str
+    vpn_agent_shared_secret: str
+    vpn_agent_timeout_seconds: float
     payment_session_minutes: int
     payment_status_token_minutes: int
     public_payment_limit: int
@@ -86,6 +89,8 @@ class Settings:
                 errors.append("API_PUBLIC_URL must use HTTPS in production")
             if not self.router_control_host or not self.router_control_cidr:
                 errors.append("ROUTER_CONTROL_HOST and ROUTER_CONTROL_CIDR are required")
+            if not self.vpn_agent_socket or len(self.vpn_agent_shared_secret) < 32:
+                errors.append("VPN_AGENT_SOCKET and a random VPN_AGENT_SHARED_SECRET of at least 32 characters are required")
 
             unknown = set(self.payment_providers) - {"mpesa", "kopokopo"}
             if not self.payment_providers or unknown:
@@ -136,6 +141,9 @@ def get_settings() -> Settings:
         router_control_cidr=os.getenv("ROUTER_CONTROL_CIDR", "10.10.10.0/24"),
         router_allowed_cidrs=_csv("ROUTER_ALLOWED_CIDRS", os.getenv("ROUTER_CONTROL_CIDR", "10.10.10.0/24")),
         onboarding_token_minutes=int(os.getenv("ONBOARDING_TOKEN_MINUTES", "30")),
+        vpn_agent_socket=os.getenv("VPN_AGENT_SOCKET", "").strip(),
+        vpn_agent_shared_secret=os.getenv("VPN_AGENT_SHARED_SECRET", ""),
+        vpn_agent_timeout_seconds=float(os.getenv("VPN_AGENT_TIMEOUT_SECONDS", "3")),
         payment_session_minutes=int(os.getenv("PAYMENT_SESSION_MINUTES", "15")),
         payment_status_token_minutes=int(os.getenv("PAYMENT_STATUS_TOKEN_MINUTES", "30")),
         public_payment_limit=int(os.getenv("PUBLIC_PAYMENT_LIMIT", "3")),

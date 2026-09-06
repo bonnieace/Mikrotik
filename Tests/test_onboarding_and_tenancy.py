@@ -23,6 +23,13 @@ def test_onboarding_is_safe_scoped_and_idempotent(db, monkeypatch):
     user = _user(db, "isp-one")
     token = "claim-token-with-more-than-thirty-two-characters"
     monkeypatch.setattr(onboarding_service, "random_token", lambda: token)
+    provisioned = {}
+    monkeypatch.setattr(onboarding_service, "vpn_agent_enabled", lambda: True)
+    monkeypatch.setattr(
+        onboarding_service,
+        "provision_l2tp_peer",
+        lambda username, password: provisioned.update(username=username, password=password) or "10.77.0.12",
+    )
     response = create_onboarding(
         RouterOnboardingRequest(name="Branch Router", portal_slug="branch-router", payment_provider="mpesa"),
         user,
@@ -36,6 +43,9 @@ def test_onboarding_is_safe_scoped_and_idempotent(db, monkeypatch):
     assert "uzanet-managed" in script
     assert "reset-configuration" not in script
     assert response["l2tp_peer"]["password"] not in repr(response["router"])
+    assert response["l2tp_peer"]["provisioned"] is True
+    assert response["l2tp_peer"]["ip_address"] == "10.77.0.12"
+    assert provisioned["username"] == response["l2tp_peer"]["username"]
 
     router = db.query(Router).filter(Router.uid == response["router"]["uid"]).first()
     assert is_encrypted(router.password)

@@ -63,14 +63,29 @@ Keep API documentation disabled in production unless operators need it: `ENABLE_
 ## Router onboarding
 
 1. The operator creates an onboarding bundle in the dashboard.
-2. Provision the returned L2TP username/password on the VPN server or RADIUS control plane.
+2. The host provisioning agent creates the matching `chap-secrets` peer and reserves its tunnel address.
 3. Import the returned `.rsc` file before its claim token expires.
 4. Confirm the router changes to `claimed`, then run an authenticated status check.
 5. Create RouterOS profiles matching each Uzanet plan's `router_profile` before selling that plan.
 
 The compatibility profile uses L2TP with MS-CHAPv2 and no IPsec to match the deployed `xl2tpd`/PPPd concentrator. It must terminate inside a protected management underlay with strict source ACLs; never expose RouterOS API port 8728 to the public Internet. IPsec or WireGuard should be the next transport upgrade for capable routers.
 
-The API generates but does not install the matching L2TP peer on an external VPN/RADIUS server. Automating that peer lifecycle is a deployment integration, not an API-side assumption.
+### Connect Coolify to xl2tpd on the same VPS
+
+Install the small root-owned provisioning agent once on the VPS from a backend checkout:
+
+```bash
+sudo bash vpn_agent/install.sh
+```
+
+Copy the generated value into the Coolify application as `VPN_AGENT_SHARED_SECRET`. Keep `VPN_AGENT_SOCKET=/run/uzanet-vpn-agent/agent.sock`, ensure the Compose bind mount for `/run/uzanet-vpn-agent` is present, and redeploy the application. The backend then creates and removes its own `router-<uuid>` peers automatically. Communication stays on a signed Unix socket; there is no public agent port.
+
+The installer matches the deployed pool (`10.10.10.10-10.10.10.100`), preserves non-Uzanet entries in `/etc/ppp/chap-secrets`, retains the latest 20 backups in `/var/lib/uzanet-vpn-agent/backups`, and exposes the socket to the container's numeric group `10001`. If the Coolify container UID/GID changes, update `UZANET_AGENT_SOCKET_GID` in `/etc/uzanet-vpn-agent/agent.env` before restarting the agent.
+
+```bash
+sudo systemctl restart uzanet-vpn-agent
+sudo systemctl status uzanet-vpn-agent --no-pager
+```
 
 ## Payment lifecycle
 

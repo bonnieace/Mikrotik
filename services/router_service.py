@@ -16,6 +16,7 @@ from schemas import RouterCreateRequest, RouterUpdateRequest
 from security import encrypt_secret, is_encrypted
 from services.mikrotik_service import router_status, validate_router_destination
 from services.onboarding_service import serialize_router
+from services.vpn_agent_service import revoke_l2tp_peer, vpn_agent_enabled
 from settings import get_settings
 
 
@@ -108,6 +109,8 @@ def delete_router(router_uid: str, current_user: AdminUser) -> None:
         row = get_router_for_user(router_uid, current_user, db)
         if crud.get_packages(db, row.id):
             raise HTTPException(status_code=409, detail="Retire packages before deleting this router")
+        if row.connection_mode == "l2tp" and vpn_agent_enabled():
+            revoke_l2tp_peer(f"router-{row.uid}")
         crud.create_log(db, "Router deleted", router_id=row.id, event_type="router.deleted")
         db.delete(row)
         db.commit()

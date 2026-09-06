@@ -19,6 +19,7 @@ from database.models import AdminUser, Router
 from database.session import SessionLocal
 from schemas import RouterOnboardingRequest
 from security import encrypt_secret, hash_token, random_token
+from services.vpn_agent_service import provision_l2tp_peer, revoke_l2tp_peer, vpn_agent_enabled
 from settings import get_settings
 
 
@@ -124,6 +125,8 @@ def create_onboarding(body: RouterOnboardingRequest, current_user: AdminUser) ->
     api_password = secrets.token_urlsafe(24)
     l2tp_password = secrets.token_urlsafe(24)
     claim_token = random_token()
+    peer_username: str | None = None
+    peer_provisioned = False
     db = SessionLocal()
     try:
         router = crud.create_router(
@@ -143,8 +146,11 @@ def create_onboarding(body: RouterOnboardingRequest, current_user: AdminUser) ->
             onboarding_token_expires_at=datetime.utcnow() + timedelta(minutes=settings.onboarding_token_minutes),
         )
         router.username = _api_username(router.uid)
-        # The L2TP credential is intentionally not stored by this API. Provision the matching
-        # peer in the VPN/RADIUS control plane from the one-time response.
+        peer_username = _l2tp_username(router.uid)
+        if vpn_agent_enabled():
+            assigned_ip = provision_l2tp_peer(peer_username, l2tp_password)
+            peer_provisioned = True
+            router.ip_address = _valid_claim_ip(assigned_ip)
         crud.create_log(db, "Router onboarding created", router_id=router.id, event_type="router.onboarding.created")
         db.commit()
         db.refresh(router)
@@ -152,11 +158,23 @@ def create_onboarding(body: RouterOnboardingRequest, current_user: AdminUser) ->
             "router": serialize_router(router),
             "expires_at": router.onboarding_token_expires_at,
             "script": _build_script(router, claim_token, api_password, l2tp_password),
-            "l2tp_peer": {"username": _l2tp_username(router.uid), "password": l2tp_password},
+            "l2tp_peer": {
+                "username": peer_username,
+                "password": l2tp_password,
+                "ip_address": None if router.ip_address == "0.0.0.0" else router.ip_address,
+                "provisioned": peer_provisioned,
+            },
         }
-    except IntegrityError as exc:
+    except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Portal slug is already in use") from exc
+        if peer_provisioned and peer_username:
+            try:
+                revoke_l2tp_peer(peer_username)
+            except Exception:
+                pass
+        if isinstance(exc, IntegrityError):
+            raise HTTPException(status_code=409, detail="Portal slug is already in use") from exc
+        raise
     finally:
         db.close()
 
@@ -179,7 +197,10 @@ def claim_onboarding(token: str, tunnel_ip: str, routeros_version: str | None) -
         if router.onboarding_status == "claimed":
             return {"status": "claimed", "router_uid": router.uid}
 
-        router.ip_address = _valid_claim_ip(tunnel_ip)
+        claimed_ip = _valid_claim_ip(tunnel_ip)
+        if router.ip_address not in {None, "0.0.0.0", claimed_ip}:
+            raise HTTPException(status_code=409, detail="Router tunnel address does not match its provisioned peer")
+        router.ip_address = claimed_ip
         router.routeros_version = re.sub(r"[^A-Za-z0-9 ._()-]", "", routeros_version or "")[:64] or None
         router.onboarding_status = "claimed"
         router.last_seen_at = now
