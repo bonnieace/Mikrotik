@@ -13,4 +13,4 @@ cryptography==50.0.1
 PyJWT==2.13.0
 python-multipart==0.0.32
 passlib[bcrypt]==1.7.4
-bcrypt==3.2.2
+bcrypt==5.0.0
