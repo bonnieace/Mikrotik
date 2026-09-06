@@ -1,232 +1,532 @@
-import time
-import base64
+"""Idempotent asynchronous payment sessions and access provisioning."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import asyncio
+from datetime import datetime, timedelta
+from decimal import Decimal
 
 from fastapi import HTTPException
+from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
+
 from database import crud
-import httpx
-import asyncio
-import random
-import string
-from datetime import datetime, timedelta
-from typing import List, Optional
-from database.crud import create_hotspot_user, create_payment, create_log
+from database.models import Package, Payment, PaymentSession, Router
 from database.session import SessionLocal
-from services.mikrotik_service import connect_to_router
+from schemas import PublicPaymentRequest
+from security import (
+    constant_time_token_matches,
+    decrypt_secret,
+    hash_token,
+    mask_phone,
+    payment_access_token,
+    private_hash,
+)
+from services.access_service import provision_paid_session
+from services.payment_providers import initiate_provider, normalize_kenyan_phone, query_mpesa
+from settings import get_settings
 
-# Constants
-BASE_URL = "https://sandbox.safaricom.co.ke"
-BUSINESS_SHORT_CODE = "174379"
-LIPA_NA_MPESA_PASSKEY = "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"
 
-def _generate_mpesa_password(timestamp: str) -> str:
-    raw = BUSINESS_SHORT_CODE + LIPA_NA_MPESA_PASSKEY + timestamp
-    return base64.b64encode(raw.encode()).decode()
-CONSUMER_KEY = "YJwAugvyRWklll798WT0CRP60IlaC4GsmXaDaG3tESRzJzfF"
-CONSUMER_SECRET = "ouz2P5YwOAKoRBnyJj8UVAIS8fZhqALYTM5NrUDG0Pu5Y5L8KdYw8z0TcFzdI0Nn"
+FINAL_STATUSES = {"provisioned", "failed", "manual_review"}
 
-async def initiate_stk_push(phone_number: str, amount: int, router_id: int):
-    db = SessionLocal()
+
+def _decimal_or_none(value) -> Decimal | None:
     try:
-        api = connect_to_router(router_id)
+        return Decimal(str(value))
+    except (TypeError, ValueError, ArithmeticError):
+        return None
 
-        # Generate OAuth token
-        auth_url = f"{BASE_URL}/oauth/v1/generate?grant_type=client_credentials"
-        async with httpx.AsyncClient() as client:
-            auth_response = await client.get(auth_url, auth=(CONSUMER_KEY, CONSUMER_SECRET))
-        if auth_response.status_code != 200:
-            create_log(db, description=f"Failed to generate access token for {phone_number}", phone_number=phone_number, router_id=router_id)
-            raise Exception("Failed to generate access token")
-        
-        access_token = auth_response.json().get("access_token")
-        if not access_token:
-            create_log(db, description=f"Access token missing for {phone_number}", phone_number=phone_number, router_id=router_id)
-            raise Exception("Access token missing in response")
-        
-        # Initiate STK Push
-        stk_url = f"{BASE_URL}/mpesa/stkpush/v1/processrequest"
-        headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-        timestamp = time.strftime("%Y%m%d%H%M%S")
-        payload = {
-            "BusinessShortCode": BUSINESS_SHORT_CODE,
-            "Password": _generate_mpesa_password(timestamp),
-            "Timestamp": timestamp,
-            "TransactionType": "CustomerPayBillOnline",    
-            "Amount": amount,    
-            "PartyA": phone_number,    
-            "PartyB": "174379",    
-            "PhoneNumber": phone_number,    
-            "CallBackURL": "https://fb43-105-163-157-64.ngrok-free.app/callback",    
-            "AccountReference": "Test",    
-            "TransactionDesc": "Test"
+
+def _fingerprint(package_uid: str, phone: str, customer_reference: str | None) -> str:
+    value = json.dumps(
+        {"package_uid": package_uid, "phone": phone, "customer_reference": customer_reference or ""},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _public_response(row: PaymentSession, *, include_token: bool = False) -> dict:
+    response = {
+        "payment_id": row.public_id,
+        "status": row.status,
+        "provider": row.provider,
+        "amount": row.amount,
+        "currency": row.currency,
+        "service_type": row.service_type,
+        "phone_number": mask_phone(row.phone_number),
+        "message": row.result_description,
+        "expires_at": row.expires_at,
+    }
+    if include_token:
+        response["status_token"] = payment_access_token(row.public_id)
+    if (
+        row.status == "provisioned"
+        and row.service_type == "hotspot"
+        and row.credentials_expires_at
+        and row.credentials_expires_at >= datetime.utcnow()
+        and row.access_password_encrypted
+    ):
+        response["credentials"] = {
+            "username": row.access_username,
+            "password": decrypt_secret(row.access_password_encrypted),
         }
+    elif row.status == "provisioned" and row.service_type == "pppoe":
+        response["account"] = row.access_username
+    return response
 
-        async with httpx.AsyncClient() as client:
-            stk_response = await client.post(stk_url, json=payload, headers=headers)
 
-        if stk_response.status_code != 200:
-            error_detail = stk_response.json()
-            create_log(db, description=f"STK Push failed for {phone_number}: {error_detail}", phone_number=phone_number, router_id=router_id)
-            raise Exception("STK push failed")
+def public_portal(portal_slug: str) -> dict:
+    settings = get_settings()
+    db = SessionLocal()
+    try:
+        router = crud.get_router_by_portal_slug(db, portal_slug)
+        if router is None or not router.portal_enabled:
+            raise HTTPException(status_code=404, detail="Portal not found")
+        if router.payment_provider not in settings.payment_providers:
+            raise HTTPException(status_code=503, detail="This portal's payment provider is not enabled")
+        packages = crud.get_packages(db, router.id, active_only=True)
+        return {
+            "portal_slug": router.portal_slug,
+            "name": router.name,
+            "payment_provider": router.payment_provider,
+            "packages": [
+                {
+                    "uid": package.uid,
+                    "name": package.name,
+                    "description": package.description,
+                    "price": package.price,
+                    "currency": "KES",
+                    "service_type": package.service_type,
+                    "validity_minutes": package.validity_minutes,
+                    "rate_limit": package.rate_limit,
+                }
+                for package in packages
+            ],
+        }
+    finally:
+        db.close()
 
-        response_data = stk_response.json()
-        checkout_request_id = response_data.get("CheckoutRequestID")
-        if not checkout_request_id:
-            create_log(db, description=f"Missing CheckoutRequestID for {phone_number}", phone_number=phone_number, router_id=router_id)
-            raise Exception("Missing CheckoutRequestID in response")
 
-        create_log(db, description=f"STK Push initiated for {phone_number}, amount={amount}, CheckoutRequestID={checkout_request_id}", phone_number=phone_number, router_id=router_id)
+async def create_public_payment(
+    portal_slug: str,
+    body: PublicPaymentRequest,
+    idempotency_key: str,
+    client_ip: str | None,
+) -> dict:
+    settings = get_settings()
+    phone = normalize_kenyan_phone(body.phone_number)
+    client_ip_hash = private_hash(client_ip) if client_ip else None
+    phone_hash = private_hash(phone)
+    fingerprint = _fingerprint(body.package_uid, phone, body.customer_reference)
+    db = SessionLocal()
+    try:
+        router = crud.get_router_by_portal_slug(db, portal_slug)
+        if router is None or not router.portal_enabled:
+            raise HTTPException(status_code=404, detail="Portal not found")
+        if router.payment_provider not in settings.payment_providers:
+            raise HTTPException(status_code=503, detail="This portal's payment provider is not enabled")
+        package = crud.get_package_by_uid(db, body.package_uid)
+        if package is None or package.router_id != router.id or not package.is_active:
+            raise HTTPException(status_code=404, detail="Package not found")
+        if package.service_type == "pppoe" and not body.customer_reference:
+            raise HTTPException(status_code=422, detail="PPPoE account reference is required")
 
-        # Wait and check payment status multiple times
-        max_attempts = 6  # Will try 6 times over 60 seconds
-        for attempt in range(max_attempts):
-            await asyncio.sleep(10)  # Wait 10 seconds between checks
-            
-            query_url = f"{BASE_URL}/mpesa/stkpushquery/v1/query"
-            headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-            query_timestamp = time.strftime("%Y%m%d%H%M%S")
-            query_payload = {
-                "BusinessShortCode": BUSINESS_SHORT_CODE,
-                "Password": _generate_mpesa_password(query_timestamp),
-                "Timestamp": query_timestamp,
-                "CheckoutRequestID": checkout_request_id
+        existing = crud.get_payment_session_by_idempotency(db, router.id, idempotency_key)
+        if existing:
+            if existing.request_fingerprint != fingerprint:
+                raise HTTPException(status_code=409, detail="Idempotency key was already used for another request")
+            return _public_response(existing, include_token=True)
+
+        since = datetime.utcnow() - timedelta(minutes=settings.public_payment_window_minutes)
+        limiter = db.query(PaymentSession).filter(PaymentSession.created_at >= since)
+        limiter = limiter.filter(
+            or_(
+                PaymentSession.phone_hash == phone_hash,
+                PaymentSession.client_ip_hash == client_ip_hash if client_ip_hash else False,
+            )
+        )
+        if limiter.count() >= settings.public_payment_limit:
+            raise HTTPException(status_code=429, detail="Too many payment attempts. Try again shortly")
+
+        row = PaymentSession(
+            access_token_hash="pending",
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+            provider=router.payment_provider or settings.payment_provider,
+            status="created",
+            phone_number=phone,
+            phone_hash=phone_hash,
+            amount=package.price,
+            service_type=package.service_type,
+            customer_reference=body.customer_reference,
+            client_ip_hash=client_ip_hash,
+            router_id=router.id,
+            package_id=package.id,
+            expires_at=datetime.utcnow() + timedelta(minutes=settings.payment_session_minutes),
+        )
+        db.add(row)
+        db.flush()
+        row.access_token_hash = hash_token(payment_access_token(row.public_id))
+        db.commit()
+        db.refresh(row)
+        public_id = row.public_id
+        provider = row.provider
+        amount = Decimal(row.amount)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Duplicate payment request") from exc
+    finally:
+        db.close()
+
+    try:
+        initiation = await initiate_provider(provider, phone, amount, public_id)
+    except Exception as exc:
+        failed_db = SessionLocal()
+        try:
+            failed = crud.get_payment_session_by_public_id(failed_db, public_id)
+            if failed and failed.status == "created":
+                failed.status = "failed"
+                failed.result_description = "Payment provider is unavailable"
+                failed_db.commit()
+        finally:
+            failed_db.close()
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=502, detail="Payment provider is unavailable") from exc
+
+    update_db = SessionLocal()
+    try:
+        row = crud.get_payment_session_by_public_id(update_db, public_id)
+        row.provider_request_id = initiation.request_id
+        row.status = "pending"
+        row.result_description = initiation.customer_message
+        crud.create_log(update_db, "Payment initiated", router_id=row.router_id, event_type="payment.initiated")
+        update_db.commit()
+        update_db.refresh(row)
+        return _public_response(row, include_token=True)
+    finally:
+        update_db.close()
+
+
+def get_public_payment(public_id: str, status_token: str) -> dict:
+    db = SessionLocal()
+    try:
+        row = crud.get_payment_session_by_public_id(db, public_id)
+        if row is None or not constant_time_token_matches(status_token, row.access_token_hash):
+            raise HTTPException(status_code=404, detail="Payment not found")
+        token_expires_at = row.created_at + timedelta(minutes=get_settings().payment_status_token_minutes)
+        if token_expires_at < datetime.utcnow():
+            raise HTTPException(status_code=404, detail="Payment not found")
+        if row.status in {"created", "pending"} and row.expires_at < datetime.utcnow():
+            row.status = "failed"
+            row.result_description = "Payment session expired"
+            db.commit()
+        return _public_response(row)
+    finally:
+        db.close()
+
+
+async def process_mpesa_callback(values: dict) -> None:
+    request_id = values.get("provider_request_id")
+    if not request_id:
+        return
+    db = SessionLocal()
+    try:
+        row = crud.get_payment_session_by_provider_id(db, request_id)
+        if row is None or row.provider != "mpesa" or row.status in FINAL_STATUSES:
+            return
+        if values.get("result_code") != "0":
+            row.status = "failed"
+            row.result_code = values.get("result_code")
+            row.result_description = str(values.get("result_description") or "Payment failed")[:255]
+            db.commit()
+            return
+        public_id = row.public_id
+        expected_amount = Decimal(row.amount)
+        expected_phone = row.phone_number
+    finally:
+        db.close()
+
+    if _decimal_or_none(values.get("amount")) != expected_amount or values.get("phone") != expected_phone:
+        _mark_manual_review(public_id, "M-Pesa callback did not match the payment request")
+        return
+    if get_settings().mpesa_verify_callback:
+        verification = await query_mpesa(request_id)
+        if str(verification.get("ResultCode")) != "0":
+            _mark_manual_review(public_id, "M-Pesa callback verification failed")
+            return
+    await asyncio.to_thread(complete_payment, public_id, values.get("receipt"), "0", values.get("result_description"))
+
+
+def process_kopokopo_callback(values: dict) -> None:
+    public_id = values.get("public_id")
+    if not public_id:
+        return
+    db = SessionLocal()
+    try:
+        row = crud.get_payment_session_by_public_id(db, public_id)
+        if row is None or row.provider != "kopokopo" or row.status in FINAL_STATUSES:
+            return
+        if str(values.get("status", "")).lower() != "success":
+            row.status = "failed"
+            row.result_description = str(values.get("result_description") or "Payment failed")[:255]
+            db.commit()
+            return
+        if _decimal_or_none(values.get("amount")) != Decimal(row.amount) or values.get("phone") != row.phone_number:
+            row.status = "manual_review"
+            row.result_description = "Kopo Kopo callback did not match the payment request"
+            db.commit()
+            return
+    finally:
+        db.close()
+    complete_payment(public_id, values.get("receipt"), "0", values.get("result_description"))
+
+
+def complete_payment(public_id: str, receipt: str | None, result_code: str, description: str | None) -> None:
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(PaymentSession)
+            .filter(PaymentSession.public_id == public_id)
+            .with_for_update()
+            .first()
+        )
+        if row is None or row.status == "provisioned":
+            return
+        if row.status == "failed":
+            row.status = "manual_review"
+            row.result_description = "Successful callback arrived after a failed result"
+            db.commit()
+            return
+        row.status = "provisioning"
+        row.provider_receipt = receipt
+        row.result_code = result_code
+        row.result_description = str(description or "Payment received")[:255]
+        package = db.query(Package).filter(Package.id == row.package_id).first()
+        if package is None:
+            row.status = "manual_review"
+            row.result_description = "Paid package no longer exists"
+            db.commit()
+            return
+        try:
+            user_id, _ = provision_paid_session(db, row, package)
+            payment = db.query(Payment).filter(Payment.invoice == row.public_id).first()
+            if payment is None:
+                db.add(
+                    Payment(
+                        invoice=row.public_id,
+                        provider=row.provider,
+                        provider_receipt=receipt,
+                        status="completed",
+                        amount=row.amount,
+                        user_type=row.service_type,
+                        user_id=int(user_id),
+                        package_id=row.package_id,
+                        router_id=row.router_id,
+                    )
+                )
+            row.status = "provisioned"
+            row.result_description = "Payment confirmed and access activated"
+            crud.create_log(db, "Payment provisioned", router_id=row.router_id, event_type="payment.provisioned")
+            db.commit()
+        except Exception:
+            db.rollback()
+            failed = crud.get_payment_session_by_public_id(db, public_id)
+            if failed:
+                failed.status = "provisioning_failed"
+                failed.result_description = "Payment received; access activation needs retry"
+                crud.create_log(db, "Payment provisioning failed", router_id=failed.router_id, level="error", event_type="payment.provisioning_failed")
+                db.commit()
+            raise
+    finally:
+        db.close()
+
+
+def retry_provisioning(public_id: str) -> dict:
+    db = SessionLocal()
+    try:
+        row = crud.get_payment_session_by_public_id(db, public_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Payment session not found")
+        if row.status not in {"provisioning", "provisioning_failed", "paid"}:
+            raise HTTPException(status_code=409, detail="Payment is not waiting for provisioning")
+        receipt = row.provider_receipt
+    finally:
+        db.close()
+    complete_payment(public_id, receipt, "0", "Provisioning retried by administrator")
+    verify_db = SessionLocal()
+    try:
+        return _public_response(crud.get_payment_session_by_public_id(verify_db, public_id))
+    finally:
+        verify_db.close()
+
+
+def _mark_manual_review(public_id: str, reason: str) -> None:
+    db = SessionLocal()
+    try:
+        row = crud.get_payment_session_by_public_id(db, public_id)
+        if row and row.status != "provisioned":
+            row.status = "manual_review"
+            row.result_description = reason[:255]
+            db.commit()
+    finally:
+        db.close()
+
+
+async def reconcile_pending_payments(limit: int = 25) -> dict:
+    """Reconcile stale M-Pesa sessions when a provider callback was missed.
+
+    Kopo Kopo is webhook-only in this MVP because its incoming-payment API returns a
+    resource URL rather than the Daraja-style authoritative STK query response.
+    """
+    cutoff = datetime.utcnow() - timedelta(seconds=30)
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(PaymentSession)
+            .filter(
+                PaymentSession.provider == "mpesa",
+                PaymentSession.status == "pending",
+                PaymentSession.updated_at <= cutoff,
+                PaymentSession.expires_at > datetime.utcnow(),
+            )
+            .order_by(PaymentSession.updated_at.asc())
+            .limit(limit)
+            .all()
+        )
+        candidates = [(row.public_id, row.provider_request_id) for row in rows if row.provider_request_id]
+    finally:
+        db.close()
+
+    provisioned = 0
+    failed = 0
+    still_pending = 0
+    for public_id, request_id in candidates:
+        try:
+            result = await query_mpesa(request_id)
+        except Exception:
+            still_pending += 1
+            continue
+        code = str(result.get("ResultCode", ""))
+        if code == "0":
+            await asyncio.to_thread(
+                complete_payment,
+                public_id,
+                result.get("MpesaReceiptNumber"),
+                code,
+                result.get("ResultDesc"),
+            )
+            provisioned += 1
+        elif code:
+            update_db = SessionLocal()
+            try:
+                row = crud.get_payment_session_by_public_id(update_db, public_id)
+                if row and row.status == "pending":
+                    row.status = "failed"
+                    row.result_code = code[:32]
+                    row.result_description = str(result.get("ResultDesc") or "Payment failed")[:255]
+                    update_db.commit()
+                    failed += 1
+            finally:
+                update_db.close()
+        else:
+            still_pending += 1
+    return {"checked": len(candidates), "provisioned": provisioned, "failed": failed, "pending": still_pending}
+
+
+def expire_payment_sessions() -> int:
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(PaymentSession)
+            .filter(PaymentSession.status.in_(("created", "pending")), PaymentSession.expires_at <= datetime.utcnow())
+            .all()
+        )
+        for row in rows:
+            row.status = "failed"
+            row.result_description = "Payment session expired"
+        db.commit()
+        return len(rows)
+    finally:
+        db.close()
+
+
+def serialize_payment(row: Payment) -> dict:
+    return {
+        "uid": row.uid,
+        "invoice": row.invoice,
+        "provider": row.provider,
+        "provider_receipt": row.provider_receipt,
+        "status": row.status,
+        "amount": row.amount,
+        "user_type": row.user_type,
+        "user_id": row.user_id,
+        "package_id": row.package_id,
+        "created_at": row.created_at,
+    }
+
+
+def list_payments(router: Router) -> list[dict]:
+    db = SessionLocal()
+    try:
+        return [serialize_payment(row) for row in crud.get_payments(db, router.id)]
+    finally:
+        db.close()
+
+
+def list_payment_sessions(router: Router) -> list[dict]:
+    db = SessionLocal()
+    try:
+        return [
+            {
+                "payment_id": row.public_id,
+                "provider": row.provider,
+                "provider_receipt": row.provider_receipt,
+                "status": row.status,
+                "amount": row.amount,
+                "currency": row.currency,
+                "service_type": row.service_type,
+                "customer_reference": row.customer_reference,
+                "phone_number": mask_phone(row.phone_number),
+                "message": row.result_description,
+                "can_retry": row.status in {"paid", "provisioning", "provisioning_failed"},
+                "created_at": row.created_at,
+                "updated_at": row.updated_at,
+                "expires_at": row.expires_at,
             }
-
-            async with httpx.AsyncClient() as client:
-                query_response = await client.post(query_url, json=query_payload, headers=headers)
-            
-            if query_response.status_code == 200:
-                response_data = query_response.json()
-                result_code = response_data.get("ResultCode")
-                
-                if result_code == "0":  # Successful payment
-                    # Generate user credentials
-                    username = ''.join(random.choices(string.digits, k=8))
-                    password = "pass123"
-                    if amount == 10:
-                        uptime = '1h'
-                    elif amount == 50:
-                        uptime = '1d'
-                    elif amount == 150:
-                        uptime = '3d'
-                    elif amount == 300:
-                        uptime = '1w'
-                    elif amount == 1000:
-                        uptime = '4w'
-                    else:
-                        uptime = None
-
-                    #add user to mikrotik use try catch with logging
-                    try:
-                        
-                        hotspot_users = api.path("ip", "hotspot", "user")
-                        hotspot_users.add(
-                            name=username,
-                            password=password,
-                            profile="default",
-                            **({"limit-uptime": uptime} if uptime else {})
-
-                        )
-                    except Exception as e:
-                        create_log(db, description=f"Failed to add hotspot user {username} to MikroTik: {str(e)}", phone_number=phone_number, router_id=router_id)
-                        raise HTTPException(status_code=400, detail=str(e))
-                    
-                    
-                    
-                    
-                    # Create hotspot user
-                    hotspot_user = create_hotspot_user(db, phone_number=phone_number, amount=amount, otp=username, router_id=router_id)
-                    # Log payment
-                    create_payment(db, invoice=checkout_request_id, amount=amount, user_type="hotspot", user_id=hotspot_user.id, router_id=router_id)
-                    # Log success
-                    create_log(db, description=f"Payment successful for user {username}", phone_number=phone_number, router_id=router_id)
-
-                    return {
-                        "status": "success",
-                        "message": "Payment successful",
-                        "credentials": {
-                            "username": username,
-                            "password": password
-                        }
-                    }
-                
-                elif result_code != "1032":  # 1032 typically means "Request cancelled by user" or "pending"
-                    create_log(db, description=f"Payment failed for {phone_number}: {response_data.get('ResultDesc')}", phone_number=phone_number, router_id=router_id)
-                    raise Exception("Payment failed or was cancelled")
-            
-            # If we're on the last attempt
-            if attempt == max_attempts - 1:
-                create_log(db, description=f"Payment timeout for {phone_number}", phone_number=phone_number, router_id=router_id)
-                raise Exception("Payment timeout - please try again or check your M-PESA for any completed transaction")
+            for row in crud.get_payment_sessions(db, router.id)
+        ]
     finally:
         db.close()
 
-#read all payments service
-def get_payments(router_id: Optional[int] = None):
-    db = SessionLocal()
-    try:
-        payments = crud.get_payments(db, router_id=router_id)
-        payment_list = []
-        for payment in payments:
-            payment_list.append({
-                "id":payment.id,
-                "invoice": payment.invoice,
-                "amount": payment.amount,
-                "user_type": payment.user_type,
-                "user_id": payment.user_id,
-                "created_at":payment.created_at
-            })
-        return payment_list
-    except Exception as e:
-        crud.create_log(db, description=f"Failed to get payments: {str(e)}", phone_number=None)
-        raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        db.close()
-    
-#read payments by user type service
-def get_payments_by_user_type(user_type: str, router_id: Optional[int] = None):
-    db = SessionLocal()
-    try:
-        payments = crud.get_payments_by_user_type(db, user_type, router_id=router_id)
-        payment_list = []
-        for payment in payments:
-            payment_list.append({
-                "id":payment.id,
-                "invoice": payment.invoice,
-                "amount": payment.amount,
-                "user_type": payment.user_type,
-                "user_id": payment.user_id,
-                "created_at":payment.created_at
 
-            })
-        return payment_list
-    except Exception as e:
-        crud.create_log(db, description=f"Failed to get payments: {str(e)}", phone_number=None)
-        raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        db.close()
-    
-#return total payment for by user type
-def get_total_payment_by_user_type(user_type: str, router_id: Optional[int] = None):
+# Compatibility reporting helpers.
+def get_payments(router_id=None):
     db = SessionLocal()
     try:
-        payments = crud.get_payments_by_user_type(db, user_type, router_id=router_id)
-        total_payment = 0
-        for payment in payments:
-            total_payment += payment.amount
-        return total_payment
-    except Exception as e:
-        crud.create_log(db, description=f"Failed to get payments: {str(e)}", phone_number=None)
-        raise HTTPException(status_code=400, detail=str(e))
+        return [serialize_payment(row) | {"id": row.id} for row in crud.get_payments(db, router_id)]
     finally:
         db.close()
-#read payment totals for the current day by user type
-def get_total_payment_for_today_by_user_type(user_type: str, router_id: Optional[int] = None):
+
+
+def get_payments_by_user_type(user_type, router_id=None):
     db = SessionLocal()
     try:
-        payments = crud.get_payment_totals_for_today_by_user_type(db, user_type, router_id=router_id)
-        return payments
-    except Exception as e:
-        crud.create_log(db, description=f"Failed to get today's payments: {str(e)}", phone_number=None)
-        raise HTTPException(status_code=400, detail=str(e))
+        return [serialize_payment(row) | {"id": row.id} for row in crud.get_payments_by_user_type(db, user_type, router_id)]
+    finally:
+        db.close()
+
+
+def get_total_payment_by_user_type(user_type, router_id=None):
+    return sum((row["amount"] for row in get_payments_by_user_type(user_type, router_id)), 0)
+
+
+def get_total_payment_for_today_by_user_type(user_type, router_id=None):
+    db = SessionLocal()
+    try:
+        return crud.get_payment_totals_for_today_by_user_type(db, user_type, router_id)
     finally:
         db.close()

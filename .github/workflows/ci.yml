@@ -1,0 +1,39 @@
+name: backend-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test-root-password
+          MYSQL_DATABASE: uzanet
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -ptest-root-password"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Compile
+        run: python -m compileall -q .
+      - name: Dependency audit
+        run: pip-audit -r requirements.txt
+      - name: Verify MySQL migrations
+        env:
+          DATABASE_URL: mysql+pymysql://root:test-root-password@127.0.0.1:3306/uzanet
+        run: alembic upgrade head
+      - name: Test
+        env:
+          DATABASE_URL: sqlite:////tmp/uzanet-ci-tests.sqlite3
+        run: pytest -q

@@ -5,3 +5,11 @@ __pycache__
 .git
 .gitignore
 *.pem
+.venv
+.pytest_cache
+.vscode
+Tests
+platform v1
+hotspot
+uzanet-landing
+uzanet.html

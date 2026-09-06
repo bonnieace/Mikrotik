@@ -3,32 +3,7 @@
 from typing import List
 
 from fastapi import HTTPException
-from librouteros import connect
-from database import crud
-from database.session import SessionLocal
-
-
-def _connect_to_router_by_id(router_id: int):
-    """Look up a router in the DB by ID and return a librouteros API connection."""
-    db = SessionLocal()
-    try:
-        router = crud.get_router_by_id(db, router_id)
-        if not router:
-            raise HTTPException(status_code=404, detail=f"Router with id {router_id} not found")
-        try:
-            return connect(
-                username=router.username,
-                password=router.password,
-                host=router.ip_address,
-                port=router.port,
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Could not connect to router {router_id}. Check that the router is reachable and the API service is enabled. Error: {e}",
-            )
-    finally:
-        db.close()
+from services.mikrotik_service import router_api
 
 
 def get_hotspot_active_users(router_id: int) -> List[dict]:
@@ -43,9 +18,8 @@ def get_hotspot_active_users(router_id: int) -> List[dict]:
         MAC address, uptime, and session metadata.
     """
     try:
-        api = _connect_to_router_by_id(router_id)
-        resource = api.path("ip", "hotspot", "active")
-        sessions = list(resource)
+        with router_api(router_id) as api:
+            sessions = list(api.path("ip", "hotspot", "active"))
         return [
             {
                 "user": session.get("user", ""),
@@ -60,8 +34,8 @@ def get_hotspot_active_users(router_id: int) -> List[dict]:
         ]
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Router returned an invalid hotspot response") from exc
 
 
 def get_ppp_active_users(router_id: int) -> List[dict]:
@@ -76,9 +50,8 @@ def get_ppp_active_users(router_id: int) -> List[dict]:
         caller ID, uptime, and session metadata.
     """
     try:
-        api = _connect_to_router_by_id(router_id)
-        resource = api.path("ppp", "active")
-        sessions = list(resource)
+        with router_api(router_id) as api:
+            sessions = list(api.path("ppp", "active"))
         return [
             {
                 "user": session.get("name", ""),
@@ -93,5 +66,5 @@ def get_ppp_active_users(router_id: int) -> List[dict]:
         ]
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Router returned an invalid PPPoE response") from exc

@@ -5,6 +5,8 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-uzanet}
+      MYSQL_USER: ${MYSQL_USER:-uzanet}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     volumes:
       - db_data:/var/lib/mysql
     healthcheck:
@@ -21,9 +23,24 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@db/${MYSQL_DATABASE:-uzanet}
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-uzanet}:${MYSQL_PASSWORD}@db/${MYSQL_DATABASE:-uzanet}
+    volumes:
+      - /run/uzanet-vpn-agent:/run/uzanet-vpn-agent:ro
     depends_on:
       db:
+        condition: service_healthy
+
+  jobs:
+    build: .
+    restart: unless-stopped
+    command: ["python", "jobs.py"]
+    entrypoint: []
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-uzanet}:${MYSQL_PASSWORD}@db/${MYSQL_DATABASE:-uzanet}
+    depends_on:
+      app:
         condition: service_healthy
 
 volumes:
