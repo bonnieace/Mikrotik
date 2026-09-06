@@ -9,6 +9,8 @@ def create_log(description: str, phone_number: str = None, router_id: int = None
     db = SessionLocal()
     try:
         log = crud.create_log(db, description, phone_number, router_id=router_id)
+        db.commit()
+        db.refresh(log)
         return log
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -24,6 +26,8 @@ def get_logs(router_id: Optional[int] = None):
         for log in logs:
             log_list.append({
                 "id":log.id,
+                "level": log.level,
+                "event_type": log.event_type,
                 "description": log.description,
                 "phone_number": log.phone_number,
                 "timestamp":log.timestamp
@@ -33,5 +37,4 @@ def get_logs(router_id: Optional[int] = None):
         raise HTTPException(status_code=400, detail=str(e))
     finally:
         db.close()
-
 
