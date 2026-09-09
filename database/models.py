@@ -33,6 +33,15 @@ class AdminUser(Base):
     routers = relationship("Router", back_populates="owner")
 
 
+class RegistrationAttempt(Base):
+    __tablename__ = "registration_attempts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    client_ip_hash = Column(String(64), nullable=True, index=True)
+    email_hash = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
 class Router(Base):
     __tablename__ = "routers"
 
