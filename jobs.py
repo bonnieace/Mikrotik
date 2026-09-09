@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 
+from services.access_service import cleanup_failed_prepared_hotspot_sessions
 from services.maintenance_service import expire_access
 from services.onboarding_service import expire_onboarding_downloads
 from services.payment_service import expire_payment_sessions, reconcile_pending_payments
@@ -25,11 +26,13 @@ async def run() -> None:
             await asyncio.to_thread(expire_onboarding_downloads)
             expired_payments = await asyncio.to_thread(expire_payment_sessions)
             reconciliation = await reconcile_pending_payments()
+            prepared_cleanup = await asyncio.to_thread(cleanup_failed_prepared_hotspot_sessions)
             access = await asyncio.to_thread(expire_access)
             logger.info(
-                "maintenance_complete expired_payments=%s reconciled=%s access=%s",
+                "maintenance_complete expired_payments=%s reconciled=%s prepared_cleanup=%s access=%s",
                 expired_payments,
                 reconciliation,
+                prepared_cleanup,
                 access,
             )
         except Exception:
