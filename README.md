@@ -11,7 +11,7 @@ FastAPI backend for a multi-router ISP MVP supporting MikroTik Hotspot and PPPoE
 - Server-priced, portal-scoped payment sessions with idempotency keys, rate limiting, protected polling, callback validation, and retryable provisioning.
 - Direct Safaricom Daraja STK Push and Kopo Kopo incoming-payment adapters.
 - A singleton jobs worker for expired access and payment reconciliation.
-- One-time RouterOS onboarding bundles that back up first, preserve WAN/default routes/DNS, and manage only objects marked `uzanet-managed`.
+- Scoped RouterOS onboarding bundles that back up first, preserve WAN/default routes/DNS, and manage only objects marked `uzanet-managed`.
 
 ```mermaid
 flowchart TD
@@ -68,7 +68,7 @@ Keep API documentation disabled in production unless operators need it: `ENABLE_
 4. Confirm the router changes to `claimed`, then run an authenticated status check.
 5. Create RouterOS profiles matching each Uzanet plan's `router_profile` before selling that plan.
 
-The compatibility profile uses L2TP with MS-CHAPv2 and no IPsec to match the deployed `xl2tpd`/PPPd concentrator. It must terminate inside a protected management underlay with strict source ACLs; never expose RouterOS API port 8728 to the public Internet. IPsec or WireGuard should be the next transport upgrade for capable routers.
+The broad compatibility profile uses L2TP with CHAP, the RouterOS `default` PPP profile, and no IPsec to match the deployed `xl2tpd`/PPPd concentrator and low-resource RouterBOARDs. This is an authenticated management tunnel, not an encrypted transport: terminate it inside a protected management underlay with strict source ACLs and never expose RouterOS API port 8728 to the public Internet. IPsec or WireGuard should be the next transport upgrade for capable routers.
 
 ### Connect Coolify to xl2tpd on the same VPS
 
@@ -109,27 +109,37 @@ then the web portals/mobile companion. Configure `API_PUBLIC_URL` as the exact H
 API origin, `ROUTER_CONTROL_HOST` as the reachable L2TP server, and the VPN agent as
 above. No Netlify storage or public static RSC directory is needed.
 
-Authenticated `POST /api/v1/routers/onboarding` now returns `install_command` and
-`download_url` alongside the existing `script`, `expires_at` and peer fields.
-Paste the entire command into the intended RouterOS terminal. It fetches using a
-separate random `X-Onboarding-Token` header and imports only after fetch succeeds.
-TLS certificate verification is mandatory, redirects are disabled, and the local
-RSC is removed after import success or failure. RouterOS needs a correct clock and
-trusted CA certificates; do not bypass validation to work around an old trust store.
-See [MikroTik Fetch documentation](https://help.mikrotik.com/docs/spaces/ROS/pages/8978514/Fetch).
+Authenticated `POST /api/v1/routers/onboarding` returns `install_command`,
+`download_url`, `tls_preflight_command`, and `legacy_ca_common_name` alongside the
+existing `script`, `expires_at` and peer fields. The TLS preflight targets
+`/health/live` and should succeed with `check-certificate=yes` before onboarding.
+Older RouterOS 6 devices may need `ISRG Root X1` imported and marked trusted first;
+use the actual file path reported by `/file print` (for example
+`hotspot/isrgrootx1.pem`) rather than assuming a root filesystem path. Never disable
+certificate validation to work around an old trust store.
 
-`GET /api/v1/router-onboarding/{router_uid}/script` redeems that scoped download
-capability once using an atomic database update. Missing/wrong/replayed/expired
-capabilities return the same 404. Tokens stay out of URLs; do not enable request
-header/body logging at the proxy. The payload is encrypted at rest, erased on
-redemption/claim, and cleared after expiry by the jobs worker. Responses are
-`no-store`. The existing independent claim token is still needed to register the
-assigned tunnel address; downloading does not imply a working router connection.
+Paste the entire install command into the intended RouterOS terminal. It removes a
+stale file of the same generated name, fetches using a separate random
+`X-Onboarding-Token` header, and imports only after fetch succeeds. TLS certificate
+verification remains mandatory. A successfully imported RSC is deleted; if import
+fails, the freshly downloaded RSC is deliberately kept so the operator can inspect
+or retry it. A later install-command retry first removes that stale copy so a failed
+fetch can never import an old script.
 
-Save the manual RSC privately before closing the setup bundle. A lost HTTP response
-may consume the download; import the saved RSC to retry before the claim expires.
-Do not create another router/payment history merely to retry an import. Existing
-clients can continue using the returned inline script during a rolling deployment.
+`GET /api/v1/router-onboarding/{router_uid}/script` uses the scoped download token but
+is retryable while the router is still `pending` and the onboarding window remains
+valid. Missing/wrong/expired tokens and unavailable routers return the same 404.
+Tokens stay out of URLs; do not enable request header/body logging at the proxy. The
+payload is encrypted at rest and erased on successful claim or expiry. Responses are
+`no-store`. The independent claim token is still needed to register the assigned
+tunnel address; downloading does not imply a working router connection.
+
+The default onboarding window is 120 minutes (`ONBOARDING_TOKEN_MINUTES=120`) to
+allow field setup and older RouterBOARD retries without turning a transient HTTP or
+filesystem failure into a new router record. Operators may configure a different
+window. Do not create another router/payment history merely to retry an import.
+Existing clients can continue using the returned inline script during a rolling
+deployment; the new response fields are additive.
 
 By default the script refuses an existing `uzanet-control` tunnel with another
 peer username. Explicit `replace_managed_tunnel: true` allows switching that
@@ -139,24 +149,18 @@ hotspot HTML are preserved. The per-onboarding configuration backup is not
 overwritten on retry. Existing plans/customers/history are not migrated between
 records. Captive portal redirects remain a separate configuration step.
 
-Before live rollout, test the command on a spare MikroTik, including the target
-RouterOS version, certificate store, API firewall reachability, interrupted import,
-and explicitly replacing a managed tunnel. Automated tests do not execute RouterOS.
-
-RouterOS 6.49 compatibility: both fetch operations now probe the redirect option
-with `:parse` before making any HTTP request. RouterOS 7.18 introduced automatic
-redirect support and its `http-max-redirect-count` option ([MikroTik changelog](https://forum.mikrotik.com/t/v7-18beta-testing-is-released/181371)).
+RouterOS 6.49 compatibility: the generated RSC avoids `:break`, uses the deployed
+CHAP-compatible L2TP settings (`profile=default allow=chap use-ipsec=no`), and probes
+the redirect option with `:parse` before making an HTTP request. RouterOS 7.18
+introduced automatic redirect support and its `http-max-redirect-count` option
+([MikroTik changelog](https://forum.mikrotik.com/t/v7-18beta-testing-is-released/181371)).
 Older versions omit the unsupported option; newer versions explicitly set it to
 zero. Certificate validation stays enabled on both paths. Network errors never
-trigger a fallback fetch or automatic retry. This is generated server-side, so
-all portal/mobile clients receive the fix without a separate UI update.
-Already-issued RSC bundles remain immutable: this fix applies to newly generated
-bundles. To repair a saved RSC specifically for RouterOS 6.49, remove the unsupported
-`http-max-redirect-count=0` from its final fetch and import it before claim expiry.
+trigger a fallback fetch or automatic claim retry. This is generated server-side,
+so portal/mobile clients receive the compatibility fix without a separate UI update.
+Already-issued RSC bundles remain immutable; the fix applies to newly generated
+bundles.
 
-The setup command is a compact single line. It stores the URL/header command and
-unique filename once, probes fetch syntax, then fetches and imports in one guarded
-block. Cleanup runs after either success or failure. For the standard API hostname
-it is 624 characters (previous compatibility command: 1,274). The token remains in
-a header, not the URL. No public bootstrap endpoint or extra HTTP request is added.
-Existing web/mobile clients display this server-generated command automatically.
+The setup command remains a compact single line. The download token stays in a
+header, not the URL. No public bootstrap endpoint is added, and existing web/mobile
+clients can continue displaying the server-generated command unchanged.
