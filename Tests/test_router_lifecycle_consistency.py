@@ -84,9 +84,9 @@ def test_router_delete_is_soft_idempotent_and_releases_portal_slug(db, monkeypat
         router_id=router.id,
         is_active=True,
     )
-    session = PaymentSession(
+    pending = PaymentSession(
         access_token_hash="x" * 64,
-        idempotency_key="delete-test",
+        idempotency_key="delete-test-pending",
         request_fingerprint="f" * 64,
         provider="mpesa",
         status="pending",
@@ -98,7 +98,21 @@ def test_router_delete_is_soft_idempotent_and_releases_portal_slug(db, monkeypat
         package_id=package.id,
         expires_at=datetime.utcnow() + timedelta(minutes=10),
     )
-    db.add_all([hotspot, ppp, session])
+    paid_retry = PaymentSession(
+        access_token_hash="y" * 64,
+        idempotency_key="delete-test-paid",
+        request_fingerprint="g" * 64,
+        provider="mpesa",
+        status="provisioning_failed",
+        phone_number="254712345679",
+        phone_hash="q" * 64,
+        amount=package.price,
+        service_type="hotspot",
+        router_id=router.id,
+        package_id=package.id,
+        expires_at=datetime.utcnow() + timedelta(minutes=10),
+    )
+    db.add_all([hotspot, ppp, pending, paid_retry])
     db.commit()
 
     revoked = []
@@ -117,9 +131,12 @@ def test_router_delete_is_soft_idempotent_and_releases_portal_slug(db, monkeypat
     assert revoked == [f"router-{router.uid}"]
     assert crud.get_routers(db, owner.id) == []
     assert all(not row.is_active for row in crud.get_packages(db, router.id))
-    assert crud.get_hotspot_users(db, router.id)[0].is_active is False
-    assert crud.get_ppp_users(db, router.id)[0].is_active is False
-    assert crud.get_payment_session_by_public_id(db, session.public_id).status == "failed"
+
+    # Router deletion does not pretend RouterOS customer accounts were disabled.
+    assert crud.get_hotspot_users(db, router.id)[0].is_active is True
+    assert crud.get_ppp_users(db, router.id)[0].is_active is True
+    assert crud.get_payment_session_by_public_id(db, pending.public_id).status == "failed"
+    assert crud.get_payment_session_by_public_id(db, paid_retry.public_id).status == "manual_review"
 
     with pytest.raises(HTTPException) as exc:
         get_router_for_user(router.uid, owner)
