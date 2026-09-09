@@ -1,7 +1,7 @@
 import pytest
 from fastapi import HTTPException
 
-from services.mikrotik_service import _traffic_interface, _upsert_router_user, routeros_duration
+from services.mikrotik_service import _monitor_traffic_once, _traffic_interface, _upsert_router_user, routeros_duration
 
 
 class FakeResource:
@@ -9,9 +9,14 @@ class FakeResource:
         self.rows = list(rows)
         self.updated = None
         self.added = None
+        self.called = None
 
     def __iter__(self):
         return iter(self.rows)
+
+    def __call__(self, command, **kwargs):
+        self.called = (command, kwargs)
+        return iter([{'rx-bits-per-second': 123, 'tx-bits-per-second': 456}])
 
     def update(self, **values):
         self.updated = values
@@ -23,10 +28,11 @@ class FakeResource:
 class FakeApi:
     def __init__(self, interfaces):
         self.interfaces = interfaces
+        self.interface_resource = FakeResource(interfaces)
 
     def path(self, *parts):
         assert parts == ("interface",)
-        return FakeResource(self.interfaces)
+        return self.interface_resource
 
 
 def test_routeros_upsert_uses_installed_client_shape():
@@ -100,3 +106,14 @@ def test_traffic_interface_falls_back_to_running_interface():
             {'name': 'ether5', 'type': 'ether', 'running': 'true'},
         ])
     ) == 'ether5'
+
+
+def test_monitor_traffic_uses_once_as_argument_not_subcommand():
+    api = FakeApi([{'name': 'br-lan', 'type': 'bridge', 'running': 'true'}])
+    rows = _monitor_traffic_once(api, 'br-lan')
+
+    assert rows[0]['rx-bits-per-second'] == 123
+    assert api.interface_resource.called == (
+        'monitor-traffic',
+        {'interface': 'br-lan', 'once': ''},
+    )
