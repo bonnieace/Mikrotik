@@ -219,3 +219,48 @@ def test_concurrent_download_has_one_winner(db, monkeypatch):
         results = list(pool.map(lambda _: redeem(), range(2)))
     assert results.count(bundle["script"]) == 1
     assert results.count(404) == 1
+
+
+def test_fetch_compatibility_probes_syntax_without_retrying_network():
+    import json
+    import re
+    from services.onboarding_service import _fetch_compatible, _install_command
+    def parsed_strings(source):
+        # RouterOS strings escape dollar interpolation, unlike JSON strings.
+        return [json.loads(x.replace(r'\$', '$')) for x in re.findall(r'\[:parse ("(?:\\.|[^"\\])*")\]', source)]
+    command = '/tool fetch url="https://api.test.invalid/claim" check-certificate=yes http-data=$body'
+    generated = _fetch_compatible(command, ' body=$claimBody')
+    modern, legacy = parsed_strings(generated)
+    assert modern == command + ' http-max-redirect-count=0'
+    assert legacy == command
+    # The old RouterOS parser sees no unsupported literal option; only :parse
+    # sees it. On either version, the HTTP operation executes once after probing.
+    without_strings = re.sub(r'"(?:\\.|[^"\\])*"', '""', generated)
+    assert 'http-max-redirect-count' not in without_strings
+    assert generated.endswith('}; $uzanetFetch body=$claimBody')
+    assert generated.count('$uzanetFetch body=') == 1
+    install = _install_command('test-router', 'https://api.test.invalid/script', 'test-token')
+    source = re.search(r':local c ("(?:\\.|[^"\\])*");', install).group(1)
+    decoded = json.loads(source.replace(r'\$', '$'))
+    assert 'check-certificate=yes' in decoded
+    assert 'http-max-redirect-count' not in decoded
+    assert 'dst-path=$path' in decoded
+    assert '[:parse ($c." http-max-redirect-count=0")]' in install
+    assert 'on-error={:set f [:parse $c]}' in install
+    assert install.index('$f path=$p;') < install.index('/import')
+
+
+def test_install_command_is_compact_and_cleans_up_both_outcomes():
+    from services.onboarding_service import _install_command
+    uid = '09aa2885-5984-4182-a9f8-8a12cc8e9c60'
+    url = f'https://api.uzanet.co.ke/api/v1/router-onboarding/{uid}/script'
+    token = 'a' * 43
+    command = _install_command(uid, url, token)
+    assert len(command) < 700
+    assert '\n' not in command
+    assert command.count(token) == 1
+    assert command.count(url) == 1
+    assert command.count(f'uzanet-{uid}.rsc') == 1
+    assert ':do {$f path=$p;/import file-name=$p} on-error={:set e true};' in command
+    assert command.index('/file remove') > command.index('on-error={:set e true}')
+    assert command.index('/file remove') < command.index(':if ($e)')

@@ -142,3 +142,21 @@ records. Captive portal redirects remain a separate configuration step.
 Before live rollout, test the command on a spare MikroTik, including the target
 RouterOS version, certificate store, API firewall reachability, interrupted import,
 and explicitly replacing a managed tunnel. Automated tests do not execute RouterOS.
+
+RouterOS 6.49 compatibility: both fetch operations now probe the redirect option
+with `:parse` before making any HTTP request. RouterOS 7.18 introduced automatic
+redirect support and its `http-max-redirect-count` option ([MikroTik changelog](https://forum.mikrotik.com/t/v7-18beta-testing-is-released/181371)).
+Older versions omit the unsupported option; newer versions explicitly set it to
+zero. Certificate validation stays enabled on both paths. Network errors never
+trigger a fallback fetch or automatic retry. This is generated server-side, so
+all portal/mobile clients receive the fix without a separate UI update.
+Already-issued RSC bundles remain immutable: this fix applies to newly generated
+bundles. To repair a saved RSC specifically for RouterOS 6.49, remove the unsupported
+`http-max-redirect-count=0` from its final fetch and import it before claim expiry.
+
+The setup command is a compact single line. It stores the URL/header command and
+unique filename once, probes fetch syntax, then fetches and imports in one guarded
+block. Cleanup runs after either success or failure. For the standard API hostname
+it is 624 characters (previous compatibility command: 1,274). The token remains in
+a header, not the URL. No public bootstrap endpoint or extra HTTP request is added.
+Existing web/mobile clients display this server-generated command automatically.

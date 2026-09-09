@@ -51,6 +51,23 @@ def _valid_claim_ip(value: str) -> str:
     return str(address)
 
 
+def _fetch_compatible(command: str, arguments: str = "") -> str:
+    """Probe syntax without network I/O; RouterOS <7.18 cannot follow redirects.
+
+    Keep unsupported options inside :parse strings so v6 can parse the outer RSC.
+    Catch only compilation, never fetch execution: HTTP failure must not redeem a
+    one-time capability again or retry a registration request.
+    """
+    modern = _ros_quote(command + " http-max-redirect-count=0")
+    legacy = _ros_quote(command)
+    return (
+        ':local uzanetFetch; '
+        f':do {{ :set uzanetFetch [:parse "{modern}"] }} '
+        f'on-error={{ :set uzanetFetch [:parse "{legacy}"] }}; '
+        f'$uzanetFetch{arguments}'
+    )
+
+
 def _build_script(router: Router, claim_token: str, api_password: str, l2tp_password: str, replace_managed_tunnel: bool = False) -> str:
     settings = get_settings()
     values = {
@@ -66,6 +83,12 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
         "claim_url": _ros_quote(f"{settings.api_public_url}/api/v1/router-onboarding/claim"),
         "token": _ros_quote(claim_token),
     }
+    claim_fetch = _fetch_compatible(
+        f'/tool fetch url="{values["claim_url"]}" check-certificate=yes '
+        'http-method=post http-header-field="Content-Type: application/json" '
+        'http-data=$body keep-result=no',
+        ' body=$claimBody',
+    )
     return rf'''# Uzanet managed onboarding — one-time token, expires automatically
 # This script preserves WAN/default routes and aborts on reserved-name conflicts.
 :local managedComment "{values['comment']}"
@@ -124,7 +147,7 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
 
 :local rosVersion [/system resource get version]
 :local claimBody ("{{\"token\":\"{values['token']}\",\"tunnel_ip\":\"" . $tunnelAddress . "\",\"routeros_version\":\"" . $rosVersion . "\"}}")
-/tool fetch url="{values['claim_url']}" check-certificate=yes http-max-redirect-count=0 http-method=post http-header-field="Content-Type: application/json" http-data=$claimBody keep-result=no
+{claim_fetch}
 :put "Uzanet registration accepted. Check connection status in the portal."
 '''
 
@@ -205,19 +228,21 @@ def create_onboarding(body: RouterOnboardingRequest, current_user: AdminUser) ->
 
 
 def _install_command(router_uid: str, url: str, token: str) -> str:
-    # Token travels in a header, never in URLs/access logs. The outer block preserves
-    # scope in a pasted terminal command. Never import after a failed fetch.
+    # One scoped line: store the fetch source and filename once. Probe syntax
+    # before execution, and never import an old/partial file after fetch failure.
     filename = _ros_quote(f"uzanet-{router_uid}.rsc")
-    return (
-        f':do {{ /tool fetch url="{_ros_quote(url)}" '
+    command = _ros_quote(
+        f'/tool fetch url="{_ros_quote(url)}" '
         f'http-header-field="X-Onboarding-Token: {token}" '
-        f'check-certificate=yes http-max-redirect-count=0 dst-path="{filename}"; '
-        f':do {{ /import file-name="{filename}" }} on-error={{ '
-        f'/file remove [find where name="{filename}"]; '
-        ':error "Setup failed. Check router state; use the saved RSC to retry before expiry." }; '
-        f'/file remove [find where name="{filename}"] '
-        f'}} on-error={{ :do {{ /file remove [find where name="{filename}"] }} on-error={{}}; '
-        ':error "Onboarding did not complete. Check connectivity, certificates, link expiry and router configuration." }'
+        'check-certificate=yes dst-path=$path'
+    )
+    return (
+        f'{{:local p "{filename}";:local c "{command}";:local f;'
+        ':do {:set f [:parse ($c." http-max-redirect-count=0")]} '
+        'on-error={:set f [:parse $c]};:local e false;'
+        ':do {$f path=$p;/import file-name=$p} on-error={:set e true};'
+        ':do {/file remove [/file find where name=$p]} on-error={};'
+        ':if ($e) do={:error "Setup failed; check connection and use saved RSC before expiry"}}'
     )
 
 
