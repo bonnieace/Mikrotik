@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException
@@ -40,6 +40,14 @@ def _decimal_or_none(value) -> Decimal | None:
         return None
 
 
+def _utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _fingerprint(package_uid: str, phone: str, customer_reference: str | None) -> str:
     value = json.dumps(
         {"package_uid": package_uid, "phone": phone, "customer_reference": customer_reference or ""},
@@ -59,7 +67,7 @@ def _public_response(row: PaymentSession, *, include_token: bool = False) -> dic
         "service_type": row.service_type,
         "phone_number": mask_phone(row.phone_number),
         "message": row.result_description,
-        "expires_at": row.expires_at,
+        "expires_at": _utc_datetime(row.expires_at),
     }
     if include_token:
         response["status_token"] = payment_access_token(row.public_id)
