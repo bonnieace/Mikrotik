@@ -20,6 +20,10 @@ def test_hotspot_redirect_uses_routeros6_file_syntax(db, monkeypatch):
         owner,
     )
     script = bundle["script"]
+    executable = "\n".join(
+        line for line in script.splitlines()
+        if not line.lstrip().startswith("#")
+    )
 
     assert "https://admin.uzanet.co.ke/portal/isp-one/branch-router" in script
     assert "link-login-only-esc" in script
@@ -27,10 +31,10 @@ def test_hotspot_redirect_uses_routeros6_file_syntax(db, monkeypatch):
     assert "mac-esc" in script
     assert "ip-esc" in script
     assert "login-pre-uzanet" in script
-    assert "/file set $loginId contents=" in script
+    assert "/file set $loginId contents=" in executable
 
-    # hAP lite / RouterOS 6.49.17 does not expose /file copy. The redirect must use
-    # only the file read/write primitives that are shared with legacy RouterOS 6.
-    assert "/file copy" not in script
-    assert "http-max-redirect-count" not in script
-    assert "html-directory-override=$managedDir" not in script
+    # hAP lite / RouterOS 6.49.17 does not expose /file copy. Check executable
+    # RouterOS lines rather than comments so this catches a real command regression.
+    assert "/file copy" not in executable
+    assert "http-max-redirect-count" not in executable
+    assert "html-directory-override=$managedDir" not in executable
