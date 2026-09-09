@@ -46,6 +46,11 @@ class Settings:
     payment_status_token_minutes: int
     public_payment_limit: int
     public_payment_window_minutes: int
+    public_registration_enabled: bool
+    public_registration_limit: int
+    public_registration_global_limit: int
+    public_registration_window_minutes: int
+    public_client_ip_header: str
     payment_provider: str
     payment_providers: tuple[str, ...]
 
@@ -69,6 +74,15 @@ class Settings:
 
     def validate(self) -> None:
         errors: list[str] = []
+        if self.public_registration_limit < 1:
+            errors.append("PUBLIC_REGISTRATION_LIMIT must be at least 1")
+        if self.public_registration_global_limit < self.public_registration_limit:
+            errors.append("PUBLIC_REGISTRATION_GLOBAL_LIMIT must be >= PUBLIC_REGISTRATION_LIMIT")
+        if self.public_registration_window_minutes < 1:
+            errors.append("PUBLIC_REGISTRATION_WINDOW_MINUTES must be at least 1")
+        if self.public_client_ip_header and any(char.isspace() for char in self.public_client_ip_header):
+            errors.append("PUBLIC_CLIENT_IP_HEADER must be a single header name")
+
         if self.is_production:
             if len(self.secret_key) < 32 or self.secret_key == "change-me-in-production":
                 errors.append("SECRET_KEY must be a random value of at least 32 characters")
@@ -148,6 +162,11 @@ def get_settings() -> Settings:
         payment_status_token_minutes=int(os.getenv("PAYMENT_STATUS_TOKEN_MINUTES", "30")),
         public_payment_limit=int(os.getenv("PUBLIC_PAYMENT_LIMIT", "3")),
         public_payment_window_minutes=int(os.getenv("PUBLIC_PAYMENT_WINDOW_MINUTES", "5")),
+        public_registration_enabled=_bool("PUBLIC_REGISTRATION_ENABLED", True),
+        public_registration_limit=int(os.getenv("PUBLIC_REGISTRATION_LIMIT", "5")),
+        public_registration_global_limit=int(os.getenv("PUBLIC_REGISTRATION_GLOBAL_LIMIT", "100")),
+        public_registration_window_minutes=int(os.getenv("PUBLIC_REGISTRATION_WINDOW_MINUTES", "60")),
+        public_client_ip_header=os.getenv("PUBLIC_CLIENT_IP_HEADER", "").strip(),
         payment_provider=os.getenv("PAYMENT_PROVIDER", "mpesa").strip().lower(),
         payment_providers=_csv("PAYMENT_PROVIDERS", os.getenv("PAYMENT_PROVIDER", "mpesa").strip().lower()),
         mpesa_base_url=os.getenv("MPESA_BASE_URL", "https://sandbox.safaricom.co.ke").rstrip("/"),
