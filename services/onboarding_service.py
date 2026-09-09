@@ -52,20 +52,14 @@ def _valid_claim_ip(value: str) -> str:
 
 
 def _fetch_compatible(command: str, arguments: str = "") -> str:
-    """Probe syntax without network I/O; RouterOS <7.18 cannot follow redirects.
+    """Emit a parsed fetch command using syntax shared by RouterOS 6 and 7.
 
-    Keep unsupported options inside :parse strings so v6 can parse the outer RSC.
-    Catch only compilation, never fetch execution: HTTP failure must not trigger a
-    second registration request.
+    The onboarding endpoints do not redirect, so avoid newer redirect-only options.
+    RouterOS 6.49 can parse a command string containing ``http-max-redirect-count``
+    but then fail when the parsed command executes, bypassing an on-error fallback.
     """
-    modern = _ros_quote(command + " http-max-redirect-count=0")
-    legacy = _ros_quote(command)
-    return (
-        ':local uzanetFetch; '
-        f':do {{ :set uzanetFetch [:parse "{modern}"] }} '
-        f'on-error={{ :set uzanetFetch [:parse "{legacy}"] }}; '
-        f'$uzanetFetch{arguments}'
-    )
+    compatible = _ros_quote(command)
+    return f':local uzanetFetch [:parse "{compatible}"]; $uzanetFetch{arguments}'
 
 
 def _build_script(router: Router, claim_token: str, api_password: str, l2tp_password: str, replace_managed_tunnel: bool = False) -> str:
@@ -246,9 +240,7 @@ def _install_command(router_uid: str, url: str, token: str) -> str:
     )
     return (
         f'{{:local p "{filename}";:do {{/file remove [/file find where name=$p]}} on-error={{}};'
-        f':local c "{command}";:local f;'
-        ':do {:set f [:parse ($c." http-max-redirect-count=0")]} '
-        'on-error={:set f [:parse $c]};:local e false;'
+        f':local c "{command}";:local f [:parse $c];:local e false;'
         ':do {$f path=$p} on-error={:set e true};'
         ':if ($e) do={:error "Download failed; check connection, clock and CA trust"};'
         ':do {/import file-name=$p} on-error={:set e true};'
