@@ -63,16 +63,15 @@ def _pending_session(db, router, package):
     return row, token
 
 
-def test_hotspot_user_is_prepared_without_releasing_credentials(db, monkeypatch):
+def test_hotspot_user_is_prepared_disabled_without_releasing_credentials(db, monkeypatch):
     router, package = _portal(db)
     session, _token = _pending_session(db, router, package)
     router_calls = []
 
-    monkeypatch.setattr(
-        access_service,
-        "provision_hotspot_access",
-        lambda *args: router_calls.append(args),
-    )
+    def fake_provision(*args, **kwargs):
+        router_calls.append((args, kwargs))
+
+    monkeypatch.setattr(access_service, "provision_hotspot_access", fake_provision)
 
     user_id, password = prepare_paid_hotspot_session(db, session, package)
     db.commit()
@@ -80,7 +79,9 @@ def test_hotspot_user_is_prepared_without_releasing_credentials(db, monkeypatch)
     prepared = db.query(HotspotUser).filter_by(id=int(user_id)).one()
     assert prepared.otp == session.access_username
     assert prepared.expires_at is None
+    assert prepared.is_active is False
     assert len(router_calls) == 1
+    assert router_calls[0][1]["enabled"] is False
     assert "credentials" not in payment_service._public_response(session)
 
     finalized_user_id, finalized_password = provision_paid_session(db, session, package)
@@ -90,8 +91,9 @@ def test_hotspot_user_is_prepared_without_releasing_credentials(db, monkeypatch)
     assert finalized_user_id == user_id
     assert finalized_password == password
     assert prepared.expires_at is not None
-    # Finalization uses the already-created RouterOS user instead of recreating it.
-    assert len(router_calls) == 1
+    assert prepared.is_active is True
+    assert len(router_calls) == 2
+    assert router_calls[1][1]["enabled"] is True
 
 
 def test_public_status_query_confirms_payment_and_releases_prepared_credentials(db, monkeypatch):
@@ -99,11 +101,10 @@ def test_public_status_query_confirms_payment_and_releases_prepared_credentials(
     session, token = _pending_session(db, router, package)
     router_calls = []
 
-    monkeypatch.setattr(
-        access_service,
-        "provision_hotspot_access",
-        lambda *args: router_calls.append(args),
-    )
+    def fake_provision(*args, **kwargs):
+        router_calls.append((args, kwargs))
+
+    monkeypatch.setattr(access_service, "provision_hotspot_access", fake_provision)
     _user_id, password = prepare_paid_hotspot_session(db, session, package)
     db.commit()
 
@@ -128,15 +129,21 @@ def test_public_status_query_confirms_payment_and_releases_prepared_credentials(
     assert result["status"] == "provisioned"
     assert result["credentials"]["username"] == session.access_username
     assert result["credentials"]["password"] == password
-    assert len(router_calls) == 1
+    assert len(router_calls) == 2
+    assert router_calls[0][1]["enabled"] is False
+    assert router_calls[1][1]["enabled"] is True
     assert db.query(Payment).filter_by(invoice=session.public_id).count() == 1
 
 
 def test_failed_payment_never_releases_prepared_credentials(db, monkeypatch):
     router, package = _portal(db)
     session, token = _pending_session(db, router, package)
+    calls = []
 
-    monkeypatch.setattr(access_service, "provision_hotspot_access", lambda *_args: None)
+    def fake_provision(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(access_service, "provision_hotspot_access", fake_provision)
     prepare_paid_hotspot_session(db, session, package)
     db.commit()
     session.updated_at = datetime.utcnow() - timedelta(seconds=10)
@@ -152,3 +159,7 @@ def test_failed_payment_never_releases_prepared_credentials(db, monkeypatch):
 
     assert result["status"] == "failed"
     assert "credentials" not in result
+    prepared = db.query(HotspotUser).filter_by(otp=session.access_username).one()
+    assert prepared.is_active is False
+    assert prepared.expires_at is None
+    assert calls[0][1]["enabled"] is False
