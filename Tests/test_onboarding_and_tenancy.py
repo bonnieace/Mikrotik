@@ -219,3 +219,28 @@ def test_concurrent_download_has_one_winner(db, monkeypatch):
         results = list(pool.map(lambda _: redeem(), range(2)))
     assert results.count(bundle["script"]) == 1
     assert results.count(404) == 1
+
+
+def test_fetch_compatibility_probes_syntax_without_retrying_network():
+    import json
+    import re
+    from services.onboarding_service import _fetch_compatible, _install_command
+    def parsed_strings(source):
+        # RouterOS strings escape dollar interpolation, unlike JSON strings.
+        return [json.loads(x.replace(r'\$', '$')) for x in re.findall(r'\[:parse ("(?:\\.|[^"\\])*")\]', source)]
+    command = '/tool fetch url="https://api.test.invalid/claim" check-certificate=yes http-data=$body'
+    generated = _fetch_compatible(command, ' body=$claimBody')
+    modern, legacy = parsed_strings(generated)
+    assert modern == command + ' http-max-redirect-count=0'
+    assert legacy == command
+    # The old RouterOS parser sees no unsupported literal option; only :parse
+    # sees it. On either version, the HTTP operation executes once after probing.
+    without_strings = re.sub(r'"(?:\\.|[^"\\])*"', '""', generated)
+    assert 'http-max-redirect-count' not in without_strings
+    assert generated.endswith('}; $uzanetFetch body=$claimBody')
+    assert generated.count('$uzanetFetch body=') == 1
+    install = _install_command('test-router', 'https://api.test.invalid/script', 'test-token')
+    modern, legacy = parsed_strings(install)
+    assert 'check-certificate=yes' in modern and 'check-certificate=yes' in legacy
+    assert 'http-max-redirect-count' not in legacy
+    assert install.index('$uzanetFetch;') < install.index('/import')
