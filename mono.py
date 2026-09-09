@@ -55,7 +55,7 @@ from services.access_service import (
 from services.active_users_service import get_hotspot_active_users, get_ppp_active_users
 from services.maintenance_service import expire_access
 from services.mikrotik_service import fetch_rt_rx_tx_data
-from services.onboarding_service import claim_onboarding, create_onboarding
+from services.onboarding_service import claim_onboarding, create_onboarding, consume_onboarding_script
 from services.package_service import create_package, list_packages, retire_package, update_package
 from services.payment_providers import (
     kopokopo_callback_values,
@@ -158,6 +158,8 @@ async def request_context(request: Request, call_next):
     request_id = request_id or str(uuid.uuid4())
     request.state.request_id = request_id
     response = await call_next(request)
+    if "/onboarding" in request.url.path or "/router-onboarding/" in request.url.path:
+        response.headers["Cache-Control"] = "no-store, private"
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -383,6 +385,15 @@ async def one_router_status(router_uid: str, current_user: AdminUser = Depends(g
 @app.post("/api/v1/routers/onboarding", status_code=201)
 async def begin_onboarding(body: RouterOnboardingRequest, current_user: AdminUser = Depends(get_current_user)):
     return create_onboarding(body, current_user)
+
+
+@app.get("/api/v1/router-onboarding/{router_uid}/script", response_class=Response)
+def download_onboarding_script(router_uid: uuid.UUID, x_onboarding_token: str = Header(default="")):
+    script = consume_onboarding_script(str(router_uid), x_onboarding_token)
+    return Response(script, media_type="text/plain", headers={
+        "Content-Disposition": f'attachment; filename="uzanet-{router_uid}.rsc"',
+        "Cache-Control": "no-store, private",
+    })
 
 
 @app.post("/api/v1/router-onboarding/claim")

@@ -10,6 +10,7 @@ import ipaddress
 import re
 import secrets
 from datetime import datetime, timedelta
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -18,7 +19,7 @@ from database import crud
 from database.models import AdminUser, Router
 from database.session import SessionLocal
 from schemas import RouterOnboardingRequest
-from security import encrypt_secret, hash_token, random_token
+from security import decrypt_secret, encrypt_secret, hash_token, random_token
 from services.vpn_agent_service import provision_l2tp_peer, revoke_l2tp_peer, vpn_agent_enabled
 from settings import get_settings
 
@@ -50,11 +51,12 @@ def _valid_claim_ip(value: str) -> str:
     return str(address)
 
 
-def _build_script(router: Router, claim_token: str, api_password: str, l2tp_password: str) -> str:
+def _build_script(router: Router, claim_token: str, api_password: str, l2tp_password: str, replace_managed_tunnel: bool = False) -> str:
     settings = get_settings()
     values = {
         "backup": _ros_quote(f"uzanet-pre-onboard-{router.uid.split('-')[0]}"),
         "comment": MANAGED_COMMENT,
+        "expected_ip": _ros_quote(router.ip_address if router.ip_address != "0.0.0.0" else ""),
         "host": _ros_quote(settings.router_control_host),
         "cidr": _ros_quote(settings.router_control_cidr),
         "api_user": _ros_quote(router.username),
@@ -64,20 +66,28 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
         "claim_url": _ros_quote(f"{settings.api_public_url}/api/v1/router-onboarding/claim"),
         "token": _ros_quote(claim_token),
     }
-    return f'''# Uzanet managed onboarding — one-time token, expires automatically
+    return rf'''# Uzanet managed onboarding — one-time token, expires automatically
 # This script preserves WAN/default routes and aborts on reserved-name conflicts.
 :local managedComment "{values['comment']}"
 :local tunnelName "uzanet-control"
 :local groupName "uzanet-api"
 :local apiUser "{values['api_user']}"
+:local replaceTunnel {"true" if replace_managed_tunnel else "false"}
 
-/system backup save name="{values['backup']}"
+:if ([:len [/file find where name="{values['backup']}.backup"]] = 0) do={{
+  /system backup save name="{values['backup']}"
+}}
 
 :local existingTunnel [/interface l2tp-client find where name=$tunnelName]
 :if ([:len $existingTunnel] > 0) do={{
   :if ([/interface l2tp-client get $existingTunnel comment] != $managedComment) do={{
     :error "Uzanet onboarding stopped: conflicting l2tp-client named uzanet-control"
   }}
+  :if ([/interface l2tp-client get $existingTunnel user] != "{values['l2tp_user']}") do={{
+    :if (!$replaceTunnel) do={{ :error "Existing Uzanet tunnel belongs to another router record. Enable replacement explicitly or use that record." }}
+    /interface l2tp-client disable $existingTunnel
+  }}
+  /interface l2tp-client set $existingTunnel connect-to="{values['host']}" user="{values['l2tp_user']}" password="{values['l2tp_password']}" allow=mschap2 add-default-route=no use-peer-dns=no disabled=no
 }} else={{
   /interface l2tp-client add name=$tunnelName comment=$managedComment connect-to="{values['host']}" user="{values['l2tp_user']}" password="{values['l2tp_password']}" allow=mschap2 add-default-route=no use-peer-dns=no disabled=no
 }}
@@ -102,7 +112,11 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
 :local tunnelAddress ""
 :for attempt from=1 to=12 do={{
   :local addrId [/ip address find where interface=$tunnelName]
-  :if ([:len $addrId] > 0) do={{ :set tunnelAddress [/ip address get $addrId address] }}
+  :if ([:len $addrId] = 1) do={{
+    :local candidate [/ip address get $addrId address]
+    :local candidateIP [:pick $candidate 0 [:find $candidate "/"]]
+    :if (("{values['expected_ip']}" = "") || ($candidateIP = "{values['expected_ip']}")) do={{ :set tunnelAddress $candidate }}
+  }}
   :if ([:len $tunnelAddress] > 0) do={{ :break }}
   :delay 5s
 }}
@@ -110,8 +124,8 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
 
 :local rosVersion [/system resource get version]
 :local claimBody ("{{\"token\":\"{values['token']}\",\"tunnel_ip\":\"" . $tunnelAddress . "\",\"routeros_version\":\"" . $rosVersion . "\"}}")
-/tool fetch url="{values['claim_url']}" http-method=post http-header-field="Content-Type: application/json" http-data=$claimBody keep-result=no
-:put "Uzanet onboarding completed. Router is ready for verification."
+/tool fetch url="{values['claim_url']}" check-certificate=yes http-max-redirect-count=0 http-method=post http-header-field="Content-Type: application/json" http-data=$claimBody keep-result=no
+:put "Uzanet registration accepted. Check connection status in the portal."
 '''
 
 
@@ -119,6 +133,9 @@ def create_onboarding(body: RouterOnboardingRequest, current_user: AdminUser) ->
     settings = get_settings()
     if not settings.router_control_host:
         raise HTTPException(status_code=503, detail="Router control host is not configured")
+    public_url = urlsplit(settings.api_public_url)
+    if public_url.scheme != "https" or not public_url.hostname or public_url.username or public_url.password or public_url.query or public_url.fragment or public_url.path:
+        raise HTTPException(status_code=503, detail="Router onboarding requires an HTTPS API_PUBLIC_URL origin")
     if body.payment_provider not in settings.payment_providers:
         raise HTTPException(status_code=422, detail="Payment provider is not enabled")
 
@@ -152,12 +169,19 @@ def create_onboarding(body: RouterOnboardingRequest, current_user: AdminUser) ->
             peer_provisioned = True
             router.ip_address = _valid_claim_ip(assigned_ip)
         crud.create_log(db, "Router onboarding created", router_id=router.id, event_type="router.onboarding.created")
+        script = _build_script(router, claim_token, api_password, l2tp_password, body.replace_managed_tunnel)
+        download_token = secrets.token_urlsafe(32)
+        router.onboarding_download_hash = hash_token(download_token)
+        router.onboarding_script_encrypted = encrypt_secret(script)
         db.commit()
         db.refresh(router)
+        download_url = f"{settings.api_public_url}/api/v1/router-onboarding/{router.uid}/script"
         return {
             "router": serialize_router(router),
             "expires_at": router.onboarding_token_expires_at,
-            "script": _build_script(router, claim_token, api_password, l2tp_password),
+            "script": script,
+            "download_url": download_url,
+            "install_command": _install_command(router.uid, download_url, download_token),
             "l2tp_peer": {
                 "username": peer_username,
                 "password": l2tp_password,
@@ -177,6 +201,66 @@ def create_onboarding(body: RouterOnboardingRequest, current_user: AdminUser) ->
         raise
     finally:
         db.close()
+
+
+
+def _install_command(router_uid: str, url: str, token: str) -> str:
+    # Token travels in a header, never in URLs/access logs. The outer block preserves
+    # scope in a pasted terminal command. Never import after a failed fetch.
+    filename = _ros_quote(f"uzanet-{router_uid}.rsc")
+    return (
+        f':do {{ /tool fetch url="{_ros_quote(url)}" '
+        f'http-header-field="X-Onboarding-Token: {token}" '
+        f'check-certificate=yes http-max-redirect-count=0 dst-path="{filename}"; '
+        f':do {{ /import file-name="{filename}" }} on-error={{ '
+        f'/file remove [find where name="{filename}"]; '
+        ':error "Setup failed. Check router state; use the saved RSC to retry before expiry." }; '
+        f'/file remove [find where name="{filename}"] '
+        f'}} on-error={{ :do {{ /file remove [find where name="{filename}"] }} on-error={{}}; '
+        ':error "Onboarding did not complete. Check connectivity, certificates, link expiry and router configuration." }'
+    )
+
+
+def consume_onboarding_script(router_uid: str, token: str) -> str:
+    """Atomically redeem a scoped download capability, independently of claim."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
+        raise HTTPException(status_code=404, detail="Onboarding download is unavailable")
+    db = SessionLocal()
+    try:
+        query = db.query(Router).filter(
+            Router.uid == router_uid,
+            Router.onboarding_download_hash == hash_token(token),
+            Router.onboarding_token_expires_at > datetime.utcnow(),
+            Router.onboarding_status == "pending",
+            Router.onboarding_script_encrypted.isnot(None),
+            Router.owner_id.in_(db.query(AdminUser.id).filter(AdminUser.is_active.is_(True))),
+        )
+        router = query.first()
+        if router is None:
+            raise HTTPException(status_code=404, detail="Onboarding download is unavailable")
+        script = decrypt_secret(router.onboarding_script_encrypted)
+        # Conditional UPDATE is also safe with multiple workers; only one wins.
+        changed = query.update({
+            Router.onboarding_download_hash: None,
+            Router.onboarding_script_encrypted: None,
+        }, synchronize_session=False)
+        if changed != 1:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="Onboarding download is unavailable")
+        db.commit()
+        return script
+    finally:
+        db.close()
+
+
+def expire_onboarding_downloads() -> int:
+    with SessionLocal() as db:
+        count = db.query(Router).filter(
+            Router.onboarding_token_expires_at <= datetime.utcnow(),
+            Router.onboarding_script_encrypted.isnot(None),
+        ).update({Router.onboarding_download_hash: None, Router.onboarding_script_encrypted: None}, synchronize_session=False)
+        db.commit()
+        return count
 
 
 def claim_onboarding(token: str, tunnel_ip: str, routeros_version: str | None) -> dict:
@@ -202,6 +286,8 @@ def claim_onboarding(token: str, tunnel_ip: str, routeros_version: str | None) -
             raise HTTPException(status_code=409, detail="Router tunnel address does not match its provisioned peer")
         router.ip_address = claimed_ip
         router.routeros_version = re.sub(r"[^A-Za-z0-9 ._()-]", "", routeros_version or "")[:64] or None
+        router.onboarding_download_hash = None
+        router.onboarding_script_encrypted = None
         router.onboarding_status = "claimed"
         router.last_seen_at = now
         router.last_error = None

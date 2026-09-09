@@ -8,6 +8,7 @@ import pytest
 os.environ.setdefault("DATABASE_URL", "sqlite:////tmp/uzanet-mvp-tests.sqlite3")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-with-at-least-32-characters")
 os.environ.setdefault("ROUTER_CREDENTIAL_KEY", "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=")
+os.environ.setdefault("API_PUBLIC_URL", "https://api.test.invalid")
 os.environ.setdefault("ROUTER_CONTROL_HOST", "vpn.test.invalid")
 os.environ.setdefault("ROUTER_CONTROL_CIDR", "10.77.0.0/24")
 os.environ.setdefault("ROUTER_ALLOWED_CIDRS", "10.77.0.0/24,127.0.0.0/8")

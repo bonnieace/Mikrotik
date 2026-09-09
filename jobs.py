@@ -7,6 +7,7 @@ import logging
 import os
 
 from services.maintenance_service import expire_access
+from services.onboarding_service import expire_onboarding_downloads
 from services.payment_service import expire_payment_sessions, reconcile_pending_payments
 from settings import get_settings
 
@@ -21,6 +22,7 @@ async def run() -> None:
     interval = max(30, int(os.getenv("JOB_INTERVAL_SECONDS", "60")))
     while True:
         try:
+            await asyncio.to_thread(expire_onboarding_downloads)
             expired_payments = await asyncio.to_thread(expire_payment_sessions)
             reconciliation = await reconcile_pending_payments()
             access = await asyncio.to_thread(expire_access)

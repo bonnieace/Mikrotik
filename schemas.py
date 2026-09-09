@@ -69,6 +69,7 @@ class RouterUpdateRequest(StrictModel):
 
 
 class RouterOnboardingRequest(StrictModel):
+    replace_managed_tunnel: bool = False
     name: str = Field(min_length=2, max_length=125)
     portal_slug: str = Field(min_length=3, max_length=60)
     payment_provider: Literal["mpesa", "kopokopo"] = "mpesa"
