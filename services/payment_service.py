@@ -89,6 +89,7 @@ def public_portal(portal_slug: str) -> dict:
             raise HTTPException(status_code=503, detail="This portal's payment provider is not enabled")
         packages = crud.get_packages(db, router.id, active_only=True)
         return {
+            "isp_identifier": router.owner.username if router.owner else None,
             "portal_slug": router.portal_slug,
             "name": router.name,
             "payment_provider": router.payment_provider,
