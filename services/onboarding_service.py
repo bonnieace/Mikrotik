@@ -228,22 +228,21 @@ def create_onboarding(body: RouterOnboardingRequest, current_user: AdminUser) ->
 
 
 def _install_command(router_uid: str, url: str, token: str) -> str:
-    # Token travels in a header, never in URLs/access logs. The outer block preserves
-    # scope in a pasted terminal command. Never import after a failed fetch.
+    # One scoped line: store the fetch source and filename once. Probe syntax
+    # before execution, and never import an old/partial file after fetch failure.
     filename = _ros_quote(f"uzanet-{router_uid}.rsc")
-    fetch = _fetch_compatible(
+    command = _ros_quote(
         f'/tool fetch url="{_ros_quote(url)}" '
         f'http-header-field="X-Onboarding-Token: {token}" '
-        f'check-certificate=yes dst-path="{filename}"'
+        'check-certificate=yes dst-path=$path'
     )
     return (
-        f':do {{ {fetch}; '
-        f':do {{ /import file-name="{filename}" }} on-error={{ '
-        f'/file remove [find where name="{filename}"]; '
-        ':error "Setup failed. Check router state; use the saved RSC to retry before expiry." }; '
-        f'/file remove [find where name="{filename}"] '
-        f'}} on-error={{ :do {{ /file remove [find where name="{filename}"] }} on-error={{}}; '
-        ':error "Onboarding did not complete. Check connectivity, certificates, link expiry and router configuration." }'
+        f'{{:local p "{filename}";:local c "{command}";:local f;'
+        ':do {:set f [:parse ($c." http-max-redirect-count=0")]} '
+        'on-error={:set f [:parse $c]};:local e false;'
+        ':do {$f path=$p;/import file-name=$p} on-error={:set e true};'
+        ':do {/file remove [/file find where name=$p]} on-error={};'
+        ':if ($e) do={:error "Setup failed; check connection and use saved RSC before expiry"}}'
     )
 
 

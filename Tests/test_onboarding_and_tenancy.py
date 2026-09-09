@@ -240,7 +240,27 @@ def test_fetch_compatibility_probes_syntax_without_retrying_network():
     assert generated.endswith('}; $uzanetFetch body=$claimBody')
     assert generated.count('$uzanetFetch body=') == 1
     install = _install_command('test-router', 'https://api.test.invalid/script', 'test-token')
-    modern, legacy = parsed_strings(install)
-    assert 'check-certificate=yes' in modern and 'check-certificate=yes' in legacy
-    assert 'http-max-redirect-count' not in legacy
-    assert install.index('$uzanetFetch;') < install.index('/import')
+    source = re.search(r':local c ("(?:\\.|[^"\\])*");', install).group(1)
+    decoded = json.loads(source.replace(r'\$', '$'))
+    assert 'check-certificate=yes' in decoded
+    assert 'http-max-redirect-count' not in decoded
+    assert 'dst-path=$path' in decoded
+    assert '[:parse ($c." http-max-redirect-count=0")]' in install
+    assert 'on-error={:set f [:parse $c]}' in install
+    assert install.index('$f path=$p;') < install.index('/import')
+
+
+def test_install_command_is_compact_and_cleans_up_both_outcomes():
+    from services.onboarding_service import _install_command
+    uid = '09aa2885-5984-4182-a9f8-8a12cc8e9c60'
+    url = f'https://api.uzanet.co.ke/api/v1/router-onboarding/{uid}/script'
+    token = 'a' * 43
+    command = _install_command(uid, url, token)
+    assert len(command) < 700
+    assert '\n' not in command
+    assert command.count(token) == 1
+    assert command.count(url) == 1
+    assert command.count(f'uzanet-{uid}.rsc') == 1
+    assert ':do {$f path=$p;/import file-name=$p} on-error={:set e true};' in command
+    assert command.index('/file remove') > command.index('on-error={:set e true}')
+    assert command.index('/file remove') < command.index(':if ($e)')

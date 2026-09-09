@@ -153,3 +153,10 @@ all portal/mobile clients receive the fix without a separate UI update.
 Already-issued RSC bundles remain immutable: this fix applies to newly generated
 bundles. To repair a saved RSC specifically for RouterOS 6.49, remove the unsupported
 `http-max-redirect-count=0` from its final fetch and import it before claim expiry.
+
+The setup command is a compact single line. It stores the URL/header command and
+unique filename once, probes fetch syntax, then fetches and imports in one guarded
+block. Cleanup runs after either success or failure. For the standard API hostname
+it is 624 characters (previous compatibility command: 1,274). The token remains in
+a header, not the URL. No public bootstrap endpoint or extra HTTP request is added.
+Existing web/mobile clients display this server-generated command automatically.
