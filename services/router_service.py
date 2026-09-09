@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
 from database import crud
-from database.models import AdminUser, HotspotUser, Package, PaymentSession, PPPUser, Router
+from database.models import AdminUser, Package, PaymentSession, PPPUser, Router
 from database.session import SessionLocal
 from schemas import RouterCreateRequest, RouterUpdateRequest
 from security import encrypt_secret, is_encrypted
@@ -104,13 +104,7 @@ def update_router(router_uid: str, body: RouterUpdateRequest, current_user: Admi
 
 
 def delete_router(router_uid: str, current_user: AdminUser) -> None:
-    """Soft-delete a router while preserving billing and audit history.
-
-    The previous hard delete was incompatible with router-scoped foreign keys and with the
-    package API, which retires packages rather than removing their rows.  Persist the local
-    deletion first, then clean up the external L2TP peer so an infrastructure failure can no
-    longer roll back the application state or leave a visible router with a revoked tunnel.
-    """
+    """Soft-delete a router while preserving billing, customer, and audit history."""
     db = SessionLocal()
     should_revoke_peer = False
     router_id: int | None = None
@@ -126,22 +120,29 @@ def delete_router(router_uid: str, current_user: AdminUser) -> None:
         router_id = row.id
         should_revoke_peer = row.connection_mode == "l2tp" and vpn_agent_enabled()
 
+        # Retire sellable packages and stop unpaid sessions. Do not rewrite customer
+        # `is_active` flags: deleting a control-plane record does not itself disable
+        # an account on RouterOS, and historical state must not claim otherwise.
         db.query(Package).filter(Package.router_id == row.id, Package.is_active.is_(True)).update(
             {Package.is_active: False}, synchronize_session=False
         )
-        db.query(HotspotUser).filter(
-            HotspotUser.router_id == row.id, HotspotUser.is_active.is_(True)
-        ).update({HotspotUser.is_active: False}, synchronize_session=False)
-        db.query(PPPUser).filter(PPPUser.router_id == row.id, PPPUser.is_active.is_(True)).update(
-            {PPPUser.is_active: False}, synchronize_session=False
-        )
         db.query(PaymentSession).filter(
             PaymentSession.router_id == row.id,
-            PaymentSession.status.in_(("created", "pending", "provisioning")),
+            PaymentSession.status.in_(("created", "pending")),
         ).update(
             {
                 PaymentSession.status: "failed",
-                PaymentSession.result_description: "Router was deleted",
+                PaymentSession.result_description: "Router was deleted before payment completion",
+            },
+            synchronize_session=False,
+        )
+        db.query(PaymentSession).filter(
+            PaymentSession.router_id == row.id,
+            PaymentSession.status.in_(("provisioning", "provisioning_failed")),
+        ).update(
+            {
+                PaymentSession.status: "manual_review",
+                PaymentSession.result_description: "Router was deleted after payment; review access or refund",
             },
             synchronize_session=False,
         )
