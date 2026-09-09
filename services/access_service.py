@@ -96,7 +96,6 @@ def create_hotspot_customer(router: Router, body: HotspotUserCreateRequest) -> d
     try:
         package = _package_for_router(db, body.package_uid, router, "hotspot")
         expires_at = datetime.utcnow() + timedelta(minutes=package.validity_minutes)
-        provision_hotspot_access(router.id, username, password, package.router_profile, package.validity_minutes)
         row = HotspotUser(
             phone_number=body.phone_number,
             amount=package.price,
@@ -108,6 +107,15 @@ def create_hotspot_customer(router: Router, body: HotspotUserCreateRequest) -> d
             is_active=True,
         )
         db.add(row)
+        db.flush()
+        provision_hotspot_access(
+            router.id,
+            username,
+            password,
+            package.router_profile,
+            package.validity_minutes,
+            replace_existing=False,
+        )
         crud.create_log(db, "Hotspot customer created", router_id=router.id, event_type="hotspot.created")
         db.commit()
         db.refresh(row)
@@ -115,6 +123,9 @@ def create_hotspot_customer(router: Router, body: HotspotUserCreateRequest) -> d
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="Hotspot username already exists") from exc
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -124,7 +135,6 @@ def create_pppoe_customer(router: Router, body: PPPUserCreateRequest) -> dict:
     try:
         package = _package_for_router(db, body.package_uid, router, "pppoe")
         expires_on = datetime.utcnow() + timedelta(minutes=package.validity_minutes)
-        provision_pppoe_access(router.id, body.pppoe_username, body.pppoe_password, package.router_profile)
         row = PPPUser(
             name=body.name,
             email=body.email,
@@ -140,6 +150,14 @@ def create_pppoe_customer(router: Router, body: PPPUserCreateRequest) -> dict:
             is_active=True,
         )
         db.add(row)
+        db.flush()
+        provision_pppoe_access(
+            router.id,
+            body.pppoe_username,
+            body.pppoe_password,
+            package.router_profile,
+            replace_existing=False,
+        )
         crud.create_log(db, "PPPoE customer created", router_id=router.id, event_type="pppoe.created")
         db.commit()
         db.refresh(row)
@@ -147,6 +165,9 @@ def create_pppoe_customer(router: Router, body: PPPUserCreateRequest) -> dict:
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(status_code=409, detail="PPPoE username already exists on this router") from exc
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -214,7 +235,7 @@ def _payment_credentials(db, payment_session: PaymentSession, package: Package) 
 
 
 def prepare_paid_hotspot_session(db, payment_session: PaymentSession, package: Package) -> tuple[str, str]:
-    """Create the paid HotSpot account before payment confirmation without releasing its credentials."""
+    """Prepare a disabled paid HotSpot account without granting unpaid access."""
     if package.service_type != "hotspot":
         raise HTTPException(status_code=422, detail="Only HotSpot sessions can be prepared before payment")
 
@@ -225,6 +246,7 @@ def prepare_paid_hotspot_session(db, payment_session: PaymentSession, package: P
         password,
         package.router_profile,
         package.validity_minutes,
+        enabled=False,
     )
     user = (
         db.query(HotspotUser)
@@ -240,7 +262,7 @@ def prepare_paid_hotspot_session(db, payment_session: PaymentSession, package: P
             expires_at=None,
             router_id=payment_session.router_id,
             package_id=package.id,
-            is_active=True,
+            is_active=False,
         )
         db.add(user)
     else:
@@ -248,13 +270,76 @@ def prepare_paid_hotspot_session(db, payment_session: PaymentSession, package: P
         user.amount = payment_session.amount
         user.password_encrypted = encrypt_secret(password)
         user.package_id = package.id
-        user.is_active = True
+        user.is_active = False
+        user.expires_at = None
     db.flush()
     return str(user.id), password
 
 
+def cleanup_prepared_hotspot_session(db, payment_session: PaymentSession) -> bool:
+    """Remove one unpaid prepared HotSpot account. Returns True when a row was cleaned."""
+    if payment_session.service_type != "hotspot" or not payment_session.access_username:
+        return False
+    user = (
+        db.query(HotspotUser)
+        .filter(
+            HotspotUser.router_id == payment_session.router_id,
+            HotspotUser.otp == payment_session.access_username,
+            HotspotUser.expires_at.is_(None),
+        )
+        .first()
+    )
+    if user is None:
+        return False
+    delete_hotspot_access(payment_session.router_id, payment_session.access_username)
+    db.delete(user)
+    payment_session.access_password_encrypted = None
+    payment_session.credentials_expires_at = None
+    db.flush()
+    return True
+
+
+def cleanup_failed_prepared_hotspot_sessions(limit: int = 200) -> dict:
+    """Best-effort cleanup for failed/expired payments that prepared disabled access."""
+    discovery_db = SessionLocal()
+    try:
+        public_ids = [
+            row.public_id
+            for row in (
+                discovery_db.query(PaymentSession)
+                .filter(
+                    PaymentSession.status == "failed",
+                    PaymentSession.service_type == "hotspot",
+                    PaymentSession.access_username.isnot(None),
+                    PaymentSession.access_password_encrypted.isnot(None),
+                )
+                .order_by(PaymentSession.updated_at.asc())
+                .limit(limit)
+                .all()
+            )
+        ]
+    finally:
+        discovery_db.close()
+
+    cleaned = 0
+    failed = 0
+    for public_id in public_ids:
+        db = SessionLocal()
+        try:
+            row = crud.get_payment_session_by_public_id(db, public_id)
+            if row is not None and row.status == "failed" and cleanup_prepared_hotspot_session(db, row):
+                db.commit()
+                cleaned += 1
+        except Exception:
+            db.rollback()
+            failed += 1
+        finally:
+            db.close()
+    return {"checked": len(public_ids), "cleaned": cleaned, "failed": failed}
+
+
 def provision_paid_session(db, payment_session: PaymentSession, package: Package) -> tuple[str, str]:
-    """Finalize paid access idempotently; prepared HotSpot users are not recreated or extended twice."""
+    """Finalize paid access idempotently; prepared HotSpot users are enabled only after payment."""
     now = datetime.utcnow()
 
     if package.service_type == "hotspot":
@@ -264,14 +349,15 @@ def provision_paid_session(db, payment_session: PaymentSession, package: Package
             .filter(HotspotUser.router_id == payment_session.router_id, HotspotUser.otp == username)
             .first()
         )
+        provision_hotspot_access(
+            payment_session.router_id,
+            username,
+            password,
+            package.router_profile,
+            package.validity_minutes,
+            enabled=True,
+        )
         if user is None:
-            provision_hotspot_access(
-                payment_session.router_id,
-                username,
-                password,
-                package.router_profile,
-                package.validity_minutes,
-            )
             user = HotspotUser(
                 phone_number=payment_session.phone_number,
                 amount=payment_session.amount,

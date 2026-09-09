@@ -225,7 +225,9 @@ def _authenticate(form_data: OAuth2PasswordRequestForm) -> dict:
         # Always verify a hash to reduce username-enumeration timing differences.
         candidate_hash = user.hashed_password if user else "$2b$12$2b2xVQyQmD/3C7Y62A/BKuF7VL2NfFv.i3I9qLfVFe1qgD0uYPZZK"
         valid = pwd_context.verify(form_data.password, candidate_hash)
-        if user and user.locked_until and user.locked_until > now:
+        # A temporary lock throttles incorrect attempts, but must never let an attacker
+        # deny access to the real operator. Correct credentials always clear the lock.
+        if user and user.locked_until and user.locked_until > now and not valid:
             raise HTTPException(status_code=429, detail="Account temporarily locked. Try again later")
         if user is None or not valid:
             if user:
@@ -525,6 +527,8 @@ async def retry_payment_provisioning(payment_id: str, current_user: AdminUser = 
         if session is None:
             raise HTTPException(status_code=404, detail="Payment session not found")
         router = crud.get_router_by_id(db, session.router_id)
+        if router is None or router.onboarding_status == "deleted":
+            raise HTTPException(status_code=404, detail="Payment session not found")
         if current_user.role != "superadmin" and router.owner_id != current_user.id:
             raise HTTPException(status_code=404, detail="Payment session not found")
     finally:

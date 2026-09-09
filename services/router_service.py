@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
 from database import crud
-from database.models import AdminUser, PPPUser, Router
+from database.models import AdminUser, Package, PaymentSession, PPPUser, Router
 from database.session import SessionLocal
 from schemas import RouterCreateRequest, RouterUpdateRequest
 from security import encrypt_secret, is_encrypted
@@ -25,7 +25,7 @@ def get_router_for_user(router_uid: str, current_user: AdminUser, db=None) -> Ro
     db = db or SessionLocal()
     try:
         router = crud.get_router_by_uid(db, router_uid)
-        if router is None:
+        if router is None or router.onboarding_status == "deleted":
             raise HTTPException(status_code=404, detail="Router not found")
         if current_user.role != "superadmin" and router.owner_id != current_user.id:
             # Do not disclose whether another tenant's router exists.
@@ -104,18 +104,82 @@ def update_router(router_uid: str, body: RouterUpdateRequest, current_user: Admi
 
 
 def delete_router(router_uid: str, current_user: AdminUser) -> None:
+    """Soft-delete a router while preserving billing, customer, and audit history."""
     db = SessionLocal()
+    should_revoke_peer = False
+    router_id: int | None = None
     try:
-        row = get_router_for_user(router_uid, current_user, db)
-        if crud.get_packages(db, row.id):
-            raise HTTPException(status_code=409, detail="Retire packages before deleting this router")
-        if row.connection_mode == "l2tp" and vpn_agent_enabled():
-            revoke_l2tp_peer(f"router-{row.uid}")
+        row = crud.get_router_by_uid(db, router_uid)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Router not found")
+        if current_user.role != "superadmin" and row.owner_id != current_user.id:
+            raise HTTPException(status_code=404, detail="Router not found")
+        if row.onboarding_status == "deleted":
+            return
+
+        router_id = row.id
+        should_revoke_peer = row.connection_mode == "l2tp" and vpn_agent_enabled()
+
+        # Retire sellable packages and stop unpaid sessions. Do not rewrite customer
+        # `is_active` flags: deleting a control-plane record does not itself disable
+        # an account on RouterOS, and historical state must not claim otherwise.
+        db.query(Package).filter(Package.router_id == row.id, Package.is_active.is_(True)).update(
+            {Package.is_active: False}, synchronize_session=False
+        )
+        db.query(PaymentSession).filter(
+            PaymentSession.router_id == row.id,
+            PaymentSession.status.in_(("created", "pending")),
+        ).update(
+            {
+                PaymentSession.status: "failed",
+                PaymentSession.result_description: "Router was deleted before payment completion",
+            },
+            synchronize_session=False,
+        )
+        db.query(PaymentSession).filter(
+            PaymentSession.router_id == row.id,
+            PaymentSession.status.in_(("provisioning", "provisioning_failed")),
+        ).update(
+            {
+                PaymentSession.status: "manual_review",
+                PaymentSession.result_description: "Router was deleted after payment; review access or refund",
+            },
+            synchronize_session=False,
+        )
+
+        row.portal_enabled = False
+        row.portal_slug = f"deleted-{row.uid}"
+        row.onboarding_status = "deleted"
+        row.onboarding_download_hash = None
+        row.onboarding_script_encrypted = None
+        row.onboarding_token_hash = None
+        row.onboarding_token_expires_at = None
         crud.create_log(db, "Router deleted", router_id=row.id, event_type="router.deleted")
-        db.delete(row)
         db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Router could not be deleted safely") from exc
     finally:
         db.close()
+
+    if should_revoke_peer:
+        try:
+            revoke_l2tp_peer(f"router-{router_uid}")
+        except Exception:
+            # The application deletion has already committed. Record cleanup failure without
+            # resurrecting the router or returning a misleading failed DELETE to the client.
+            cleanup_db = SessionLocal()
+            try:
+                crud.create_log(
+                    cleanup_db,
+                    "Router deleted but L2TP peer cleanup failed",
+                    router_id=router_id,
+                    level="error",
+                    event_type="router.delete.cleanup_failed",
+                )
+                cleanup_db.commit()
+            finally:
+                cleanup_db.close()
 
 
 def check_router(router_uid: str, current_user: AdminUser) -> dict:
@@ -162,7 +226,7 @@ def _record_status(router_id: int, result: dict) -> None:
     db = SessionLocal()
     try:
         row = crud.get_router_by_id(db, router_id)
-        if row is None:
+        if row is None or row.onboarding_status == "deleted":
             return
         if result["status"] == "online":
             row.last_seen_at = datetime.utcnow()

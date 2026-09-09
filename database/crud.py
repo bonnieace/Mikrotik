@@ -109,8 +109,10 @@ def create_router(db: Session, **values) -> Router:
     return row
 
 
-def get_routers(db: Session, owner_id: Optional[int] = None):
+def get_routers(db: Session, owner_id: Optional[int] = None, *, include_deleted: bool = False):
     query = db.query(Router)
+    if not include_deleted:
+        query = query.filter(Router.onboarding_status != "deleted")
     if owner_id is not None:
         query = query.filter(Router.owner_id == owner_id)
     return query.order_by(Router.created_at.desc()).all()
