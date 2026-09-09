@@ -39,7 +39,7 @@ services:
     environment:
       DATABASE_URL: mysql+pymysql://${MYSQL_USER:-uzanet}:${MYSQL_PASSWORD}@db/${MYSQL_DATABASE:-uzanet}
     depends_on:
-      app:
+      db:
         condition: service_healthy
 
 volumes:
