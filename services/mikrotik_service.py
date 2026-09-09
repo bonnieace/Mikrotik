@@ -35,7 +35,7 @@ def _load_router(router_id: int) -> Router:
     db = SessionLocal()
     try:
         router = crud.get_router_by_id(db, router_id)
-        if router is None:
+        if router is None or router.onboarding_status == "deleted":
             raise HTTPException(status_code=404, detail="Router not found")
         db.expunge(router)
         return router
@@ -56,6 +56,8 @@ def _close_api(api) -> None:
 @contextmanager
 def router_api(router_or_id: Router | int):
     router = _load_router(router_or_id) if isinstance(router_or_id, int) else router_or_id
+    if router.onboarding_status == "deleted":
+        raise HTTPException(status_code=404, detail="Router not found")
     validate_router_destination(router.ip_address)
     try:
         password = decrypt_secret(router.password)
@@ -113,32 +115,108 @@ def router_status(router: Router) -> dict:
         return {"status": "offline", "authenticated": False, "detail": exc.detail}
 
 
+def _traffic_interface(api) -> str:
+    interfaces = list(api.path("interface"))
+    if not interfaces:
+        raise HTTPException(status_code=502, detail="Router returned no interfaces")
+
+    named_bridge = next((row for row in interfaces if row.get("name") == "bridge"), None)
+    if named_bridge:
+        return "bridge"
+
+    running_bridge = next(
+        (
+            row
+            for row in interfaces
+            if str(row.get("type", "")).lower() == "bridge"
+            and str(row.get("running", "")).lower() in {"true", "yes"}
+            and row.get("name")
+        ),
+        None,
+    )
+    if running_bridge:
+        return str(running_bridge["name"])
+
+    running = next(
+        (
+            row
+            for row in interfaces
+            if str(row.get("running", "")).lower() in {"true", "yes"}
+            and str(row.get("type", "")).lower() != "loopback"
+            and row.get("name")
+        ),
+        None,
+    )
+    if running:
+        return str(running["name"])
+
+    fallback = next((row for row in interfaces if row.get("name")), None)
+    if fallback:
+        return str(fallback["name"])
+    raise HTTPException(status_code=502, detail="Router returned no usable interface")
+
+
 def fetch_rt_rx_tx_data(router_id: int):
     with router_api(router_id) as api:
-        result = list(api.path("interface", "monitor-traffic")("once", interface="bridge"))
+        interface = _traffic_interface(api)
+        result = list(api.path("interface", "monitor-traffic")("once", interface=interface))
     if not result:
         raise HTTPException(status_code=502, detail="Router returned no traffic data")
     return {
+        "interface": interface,
         "rx_bits_per_second": result[0].get("rx-bits-per-second", 0),
         "tx_bits_per_second": result[0].get("tx-bits-per-second", 0),
     }
 
 
-def _upsert_router_user(resource, username: str, password: str, profile: str, duration: str | None) -> None:
+def _upsert_router_user(
+    resource,
+    username: str,
+    password: str,
+    profile: str,
+    duration: str | None,
+    *,
+    replace_existing: bool = True,
+    enabled: bool = True,
+) -> None:
     existing = [row for row in resource if row.get("name") == username]
-    values = {"name": username, "password": password, "profile": profile, "disabled": "no"}
+    values = {
+        "name": username,
+        "password": password,
+        "profile": profile,
+        "disabled": "no" if enabled else "yes",
+    }
     if duration:
         values["limit-uptime"] = duration
     if existing:
+        if not replace_existing:
+            raise HTTPException(status_code=409, detail="Username already exists on router")
         resource.update(**{**values, ".id": existing[0][".id"]})
     else:
         resource.add(**values)
 
 
-def provision_hotspot_access(router_id: int, username: str, password: str, profile: str, minutes: int) -> None:
+def provision_hotspot_access(
+    router_id: int,
+    username: str,
+    password: str,
+    profile: str,
+    minutes: int,
+    *,
+    replace_existing: bool = True,
+    enabled: bool = True,
+) -> None:
     duration = routeros_duration(minutes)
     with router_api(router_id) as api:
-        _upsert_router_user(api.path("ip", "hotspot", "user"), username, password, profile, duration)
+        _upsert_router_user(
+            api.path("ip", "hotspot", "user"),
+            username,
+            password,
+            profile,
+            duration,
+            replace_existing=replace_existing,
+            enabled=enabled,
+        )
 
 
 def set_hotspot_enabled(router_id: int, username: str, enabled: bool) -> None:
@@ -160,12 +238,28 @@ def delete_hotspot_access(router_id: int, username: str) -> None:
             active.remove(row[".id"])
 
 
-def provision_pppoe_access(router_id: int, username: str, password: str, profile: str) -> None:
+def provision_pppoe_access(
+    router_id: int,
+    username: str,
+    password: str,
+    profile: str,
+    *,
+    replace_existing: bool = True,
+    enabled: bool = True,
+) -> None:
     with router_api(router_id) as api:
         resource = api.path("ppp", "secret")
         existing = [row for row in resource if row.get("name") == username]
-        values = {"name": username, "password": password, "profile": profile, "service": "pppoe", "disabled": "no"}
+        values = {
+            "name": username,
+            "password": password,
+            "profile": profile,
+            "service": "pppoe",
+            "disabled": "no" if enabled else "yes",
+        }
         if existing:
+            if not replace_existing:
+                raise HTTPException(status_code=409, detail="Username already exists on router")
             resource.update(**{**values, ".id": existing[0][".id"]})
         else:
             resource.add(**values)
