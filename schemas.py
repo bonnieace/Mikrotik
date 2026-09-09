@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,58}[a-z0-9])?$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class StrictModel(BaseModel):
@@ -21,6 +22,28 @@ class CreateAdminUserRequest(StrictModel):
     password: str = Field(min_length=12, max_length=128)
     email: Optional[str] = Field(default=None, max_length=255)
     role: Literal["superadmin", "isp"] = "isp"
+
+
+class ISPRegistrationRequest(StrictModel):
+    username: str = Field(min_length=3, max_length=60)
+    email: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=12, max_length=128)
+
+    @field_validator("username")
+    @classmethod
+    def valid_username(cls, value: str) -> str:
+        value = value.lower()
+        if not SLUG_RE.fullmatch(value):
+            raise ValueError("use lowercase letters, numbers, and hyphens")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, value: str) -> str:
+        value = value.lower()
+        if not EMAIL_RE.fullmatch(value):
+            raise ValueError("enter a valid email address")
+        return value
 
 
 class ChangePasswordRequest(StrictModel):
@@ -140,4 +163,3 @@ class PublicPaymentRequest(StrictModel):
 
 class PaymentRetryRequest(StrictModel):
     reason: Optional[str] = Field(default=None, max_length=255)
-
