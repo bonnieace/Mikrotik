@@ -1,8 +1,8 @@
 """Generate, download, and claim idempotent RouterOS onboarding scripts.
 
 The script keeps Uzanet-owned control objects isolated, creates a pre-change backup, and aborts
-on reserved-name conflicts. When HotSpot is enabled it preserves the active HTML directory,
-creates a managed copy, and switches the profile only after the ISP-aware redirect is fetched.
+on reserved-name conflicts. When HotSpot is enabled it preserves the active login page before
+installing a small ISP-qualified redirect using RouterOS 6/7 shared file syntax.
 """
 
 from __future__ import annotations
@@ -103,11 +103,23 @@ def _build_script(
     settings = get_settings()
     isp_identifier = isp_identifier or _portal_identity(router)
     portal_origin = _portal_public_origin()
-    portal_template_url = ""
+    portal_html = ""
     if portal_origin and isp_identifier and router.portal_enabled:
-        portal_template_url = (
-            f"{portal_origin}/hotspot-login/{quote(isp_identifier, safe='')}/"
+        portal_url = (
+            f"{portal_origin}/portal/{quote(isp_identifier, safe='')}/"
             f"{quote(router.portal_slug, safe='')}"
+        )
+        redirect_url = (
+            f"{portal_url}?link-login-only=$(link-login-only-esc)"
+            "&link-orig=$(link-orig-esc)&mac=$(mac-esc)&ip=$(ip-esc)"
+        )
+        escaped_url = redirect_url.replace("&", "&amp;")
+        portal_html = (
+            '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            '<meta http-equiv="cache-control" content="no-store">'
+            f'<meta http-equiv="refresh" content="0;url={escaped_url}">'
+            '<title>Connecting to Uzanet</title></head><body>'
+            f'<p><a href="{escaped_url}">Continue</a></p></body></html>'
         )
 
     values = {
@@ -122,8 +134,7 @@ def _build_script(
         "l2tp_password": _ros_quote(l2tp_password),
         "claim_url": _ros_quote(f"{settings.api_public_url}/api/v1/router-onboarding/claim"),
         "token": _ros_quote(claim_token),
-        "portal_template_url": _ros_quote(portal_template_url),
-        "managed_hotspot_suffix": _ros_quote(f"-uzanet-{router.uid.split('-')[0]}"),
+        "portal_html": _ros_quote(portal_html),
     }
     claim_fetch = _fetch_compatible(
         f'/tool fetch url="{values["claim_url"]}" check-certificate=yes '
@@ -133,16 +144,11 @@ def _build_script(
     )
 
     hotspot_block = ""
-    if values["portal_template_url"]:
-        portal_fetch = _fetch_compatible(
-            f'/tool fetch url="{values["portal_template_url"]}" check-certificate=yes dst-path=$path',
-            ' path=$loginPath',
-            variable="uzanetPortalFetch",
-        )
+    if values["portal_html"]:
         hotspot_block = rf'''
-# Preserve the current HotSpot HTML set. A managed copy is activated only after its
-# ISP-aware login redirect has downloaded successfully. Failure here does not undo
-# control-plane onboarding; it leaves the existing HotSpot portal untouched.
+# Preserve the active HotSpot login page once, then replace only login.html with
+# a small ISP-qualified redirect. This avoids /file copy and other RouterOS 7-only
+# file operations while leaving all other HotSpot assets untouched.
 :local portalSynced false
 :local hotspotServers [/ip hotspot find where disabled=no]
 :if ([:len $hotspotServers] > 0) do={{
@@ -156,28 +162,29 @@ def _build_script(
       :local overrideDir ""
       :do {{ :set overrideDir [/ip hotspot profile get $profileId html-directory-override] }} on-error={{}}
       :if ([:len $overrideDir] > 0) do={{ :set sourceDir $overrideDir }}
-      :local managedDir ($baseDir . "{values['managed_hotspot_suffix']}")
-      :if ([:len [/file find where name=$managedDir]] = 0) do={{
-        :local sourceItem [/file find where name=$sourceDir]
-        :if ([:len $sourceItem] > 0) do={{
-          :do {{ /file copy $sourceItem name=$managedDir }} on-error={{ :log warning "Uzanet portal: could not copy HotSpot HTML directory" }}
+      :local loginPath ($sourceDir . "/login.html")
+      :local loginId [/file find where name=$loginPath]
+      :if ([:len $loginId] = 1) do={{
+        :local backupBase ($sourceDir . "/login-pre-uzanet")
+        :local backupPath ($backupBase . ".txt")
+        :local backupReady true
+        :if ([:len [/file find where name=$backupPath]] = 0) do={{
+          :local currentLogin [/file get $loginId contents]
+          :do {{ /file print file=$backupBase }} on-error={{ :set backupReady false }}
           :delay 1s
+          :local backupId [/file find where name=$backupPath]
+          :if ([:len $backupId] = 1) do={{
+            :do {{ /file set $backupId contents=$currentLogin }} on-error={{ :set backupReady false }}
+          }} else={{ :set backupReady false }}
         }}
-      }}
-      :if ([:len [/file find where name=$managedDir]] > 0) do={{
-        :local loginPath ($managedDir . "/login.html")
-        :local syncFailed false
-        :do {{
-          {portal_fetch}
-        }} on-error={{ :set syncFailed true }}
-        :if (!$syncFailed) do={{
-          :do {{ /ip hotspot profile set $profileId html-directory-override=$managedDir }} on-error={{ :set syncFailed true }}
+        :if ($backupReady) do={{
+          :do {{ /file set $loginId contents="{values['portal_html']}" }} on-error={{ :set backupReady false }}
         }}
-        :if (!$syncFailed) do={{ :set portalSynced true }}
+        :if ($backupReady) do={{ :set portalSynced true }}
       }}
     }}
   }}
-  :if (!$portalSynced) do={{ :log warning "Uzanet portal redirect was not changed; existing HotSpot HTML remains active" }}
+  :if (!$portalSynced) do={{ :log warning "Uzanet portal redirect was not changed; existing HotSpot login remains active" }}
 }}
 '''
 
