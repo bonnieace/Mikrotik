@@ -38,10 +38,14 @@ def test_onboarding_is_safe_scoped_and_idempotent(db, monkeypatch):
     assert "/system backup save" in script
     assert "add-default-route=no" in script
     assert "use-peer-dns=no" in script
-    assert "allow=mschap2" in script
+    assert "profile=default allow=chap use-ipsec=no" in script
+    assert "allow=mschap2" not in script
     assert "allow=pap" not in script
+    assert ":break" not in script
     assert "uzanet-managed" in script
     assert "reset-configuration" not in script
+    assert response["tls_preflight_command"].endswith('/health/live" check-certificate=yes keep-result=no')
+    assert response["legacy_ca_common_name"] == "ISRG Root X1"
     assert response["l2tp_peer"]["password"] not in repr(response["router"])
     assert response["l2tp_peer"]["provisioned"] is True
     assert response["l2tp_peer"]["ip_address"] == "10.77.0.12"
@@ -109,14 +113,16 @@ def test_generated_claim_json_and_scoped_download(db, monkeypatch):
     with pytest.raises(HTTPException):
         consume_onboarding_script(router.uid, claim["token"])
     assert consume_onboarding_script(router.uid, token) == bundle["script"]
+    assert consume_onboarding_script(router.uid, token) == bundle["script"]
+    db.refresh(router)
+    assert router.onboarding_script_encrypted is not None
+    assert router.onboarding_download_hash == hash_token(token)
+    assert router.onboarding_status == "pending"
+    # Download retries must not consume the separate claim capability.
+    assert claim_onboarding(claim["token"], "10.77.0.15", "7.20")["status"] == "claimed"
     db.refresh(router)
     assert router.onboarding_script_encrypted is None
     assert router.onboarding_download_hash is None
-    assert router.onboarding_status == "pending"
-    with pytest.raises(HTTPException):
-        consume_onboarding_script(router.uid, token)
-    # Download consumption must not consume the separate claim capability.
-    assert claim_onboarding(claim["token"], "10.77.0.15", "7.20")["status"] == "claimed"
 
 
 @pytest.mark.parametrize("reason", ["expired", "claimed", "disabled", "deleted"])
@@ -167,7 +173,8 @@ def test_download_http_contract(db, monkeypatch):
     assert "no-store" in response.headers["cache-control"]
     assert response.headers["referrer-policy"] == "no-referrer"
     again = client.get(url, headers={"X-Onboarding-Token": token})
-    assert again.status_code == 404
+    assert again.status_code == 200
+    assert again.text == bundle["script"]
     assert "no-store" in again.headers["cache-control"]
 
 
@@ -195,7 +202,7 @@ def test_download_requires_https_before_creating_router(db, monkeypatch):
 
 
 
-def test_concurrent_download_has_one_winner(db, monkeypatch):
+def test_concurrent_downloads_are_retry_safe(db, monkeypatch):
     import re
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
@@ -210,15 +217,14 @@ def test_concurrent_download_has_one_winner(db, monkeypatch):
         barrier.wait(timeout=5)
         return decrypt(value)
     monkeypatch.setattr(onboarding_service, "decrypt_secret", synchronized_decrypt)
-    def redeem():
+    def download():
         try:
             return consume_onboarding_script(bundle["router"]["uid"], token)
         except HTTPException as exc:
             return exc.status_code
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(lambda _: redeem(), range(2)))
-    assert results.count(bundle["script"]) == 1
-    assert results.count(404) == 1
+        results = list(pool.map(lambda _: download(), range(2)))
+    assert results == [bundle["script"], bundle["script"]]
 
 
 def test_fetch_compatibility_probes_syntax_without_retrying_network():
@@ -247,20 +253,23 @@ def test_fetch_compatibility_probes_syntax_without_retrying_network():
     assert 'dst-path=$path' in decoded
     assert '[:parse ($c." http-max-redirect-count=0")]' in install
     assert 'on-error={:set f [:parse $c]}' in install
-    assert install.index('$f path=$p;') < install.index('/import')
+    assert install.index('$f path=$p') < install.index('/import')
 
 
-def test_install_command_is_compact_and_cleans_up_both_outcomes():
+def test_install_command_is_compact_retains_failed_rsc_and_cleans_success():
     from services.onboarding_service import _install_command
     uid = '09aa2885-5984-4182-a9f8-8a12cc8e9c60'
     url = f'https://api.uzanet.co.ke/api/v1/router-onboarding/{uid}/script'
     token = 'a' * 43
     command = _install_command(uid, url, token)
-    assert len(command) < 700
+    assert len(command) < 950
     assert '\n' not in command
     assert command.count(token) == 1
     assert command.count(url) == 1
     assert command.count(f'uzanet-{uid}.rsc') == 1
-    assert ':do {$f path=$p;/import file-name=$p} on-error={:set e true};' in command
-    assert command.index('/file remove') > command.index('on-error={:set e true}')
-    assert command.index('/file remove') < command.index(':if ($e)')
+    assert ':do {$f path=$p} on-error={:set e true};' in command
+    assert ':do {/import file-name=$p} on-error={:set e true};' in command
+    assert 'Download failed; check connection, clock and CA trust' in command
+    assert 'Setup failed; downloaded RSC was kept for retry' in command
+    assert command.index('/file remove') < command.index('$f path=$p')
+    assert command.rindex('/file remove') > command.index('downloaded RSC was kept for retry')
