@@ -101,7 +101,7 @@ def test_generated_claim_json_and_scoped_download(db, monkeypatch):
     assert token not in bundle["download_url"]
     assert claim["token"] != token
     assert "check-certificate=yes" in command
-    assert "http-max-redirect-count=0" in command
+    assert "http-max-redirect-count" not in command
     assert command.index("/tool fetch") < command.index("/import")
     assert "/file remove" in command
     router = db.query(Router).filter_by(uid=bundle["router"]["uid"]).one()
@@ -227,32 +227,28 @@ def test_concurrent_downloads_are_retry_safe(db, monkeypatch):
     assert results == [bundle["script"], bundle["script"]]
 
 
-def test_fetch_compatibility_probes_syntax_without_retrying_network():
+def test_fetch_compatibility_uses_only_routeros6_shared_syntax():
     import json
     import re
     from services.onboarding_service import _fetch_compatible, _install_command
-    def parsed_strings(source):
-        # RouterOS strings escape dollar interpolation, unlike JSON strings.
-        return [json.loads(x.replace(r'\$', '$')) for x in re.findall(r'\[:parse ("(?:\\.|[^"\\])*")\]', source)]
+
     command = '/tool fetch url="https://api.test.invalid/claim" check-certificate=yes http-data=$body'
     generated = _fetch_compatible(command, ' body=$claimBody')
-    modern, legacy = parsed_strings(generated)
-    assert modern == command + ' http-max-redirect-count=0'
-    assert legacy == command
-    # The old RouterOS parser sees no unsupported literal option; only :parse
-    # sees it. On either version, the HTTP operation executes once after probing.
-    without_strings = re.sub(r'"(?:\\.|[^"\\])*"', '""', generated)
-    assert 'http-max-redirect-count' not in without_strings
-    assert generated.endswith('}; $uzanetFetch body=$claimBody')
+    parsed = re.search(r'\[:parse ("(?:\\.|[^"\\])*")\]', generated).group(1)
+    decoded = json.loads(parsed.replace(r'\$', '$'))
+    assert decoded == command
+    assert 'http-max-redirect-count' not in generated
+    assert generated.endswith('; $uzanetFetch body=$claimBody')
     assert generated.count('$uzanetFetch body=') == 1
+
     install = _install_command('test-router', 'https://api.test.invalid/script', 'test-token')
     source = re.search(r':local c ("(?:\\.|[^"\\])*");', install).group(1)
     decoded = json.loads(source.replace(r'\$', '$'))
     assert 'check-certificate=yes' in decoded
     assert 'http-max-redirect-count' not in decoded
     assert 'dst-path=$path' in decoded
-    assert '[:parse ($c." http-max-redirect-count=0")]' in install
-    assert 'on-error={:set f [:parse $c]}' in install
+    assert ':local f [:parse $c]' in install
+    assert 'http-max-redirect-count' not in install
     assert install.index('$f path=$p') < install.index('/import')
 
 
