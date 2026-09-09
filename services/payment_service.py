@@ -25,11 +25,12 @@ from security import (
     private_hash,
 )
 from services.access_service import prepare_paid_hotspot_session, provision_paid_session
-from services.payment_providers import initiate_provider, normalize_kenyan_phone, query_mpesa
+from services.payment_providers import initiate_provider, normalize_kenyan_phone, query_mpesa, query_mpesa_sync
 from settings import get_settings
 
 
 FINAL_STATUSES = {"provisioned", "failed", "manual_review"}
+MPESA_STATUS_QUERY_SECONDS = 5
 
 
 def _decimal_or_none(value) -> Decimal | None:
@@ -264,37 +265,6 @@ async def create_public_payment(
         update_db.close()
 
 
-def get_public_payment(public_id: str, status_token: str) -> dict:
-    db = SessionLocal()
-    try:
-        row = crud.get_payment_session_by_public_id(db, public_id)
-        if row is None or not constant_time_token_matches(status_token, row.access_token_hash):
-            raise HTTPException(status_code=404, detail="Payment not found")
-        token_expires_at = row.created_at + timedelta(minutes=get_settings().payment_status_token_minutes)
-        if token_expires_at < datetime.utcnow():
-            raise HTTPException(status_code=404, detail="Payment not found")
-        if row.status in {"created", "pending"} and row.expires_at < datetime.utcnow():
-            row.status = "failed"
-            row.result_description = "Payment session expired"
-            db.commit()
-        return _public_response(row)
-    finally:
-        db.close()
-
-
-def _pending_mpesa_request_id(public_id: str, status_token: str) -> str | None:
-    db = SessionLocal()
-    try:
-        row = crud.get_payment_session_by_public_id(db, public_id)
-        if row is None or not constant_time_token_matches(status_token, row.access_token_hash):
-            raise HTTPException(status_code=404, detail="Payment not found")
-        if row.provider != "mpesa" or row.status != "pending":
-            return None
-        return row.provider_request_id
-    finally:
-        db.close()
-
-
 def _mark_provider_query_failure(public_id: str, code: str, description: str | None) -> None:
     db = SessionLocal()
     try:
@@ -308,46 +278,68 @@ def _mark_provider_query_failure(public_id: str, code: str, description: str | N
         db.close()
 
 
-async def get_public_payment_authoritative(public_id: str, status_token: str) -> dict:
-    """Return public status, querying Daraja directly while an M-Pesa payment is pending."""
-    snapshot = get_public_payment(public_id, status_token)
-    if snapshot["status"] != "pending" or snapshot["provider"] != "mpesa":
-        return snapshot
-
-    request_id = _pending_mpesa_request_id(public_id, status_token)
-    if not request_id:
-        return snapshot
-
+def _query_pending_mpesa(public_id: str, request_id: str) -> None:
     try:
-        result = await query_mpesa(request_id)
+        result = query_mpesa_sync(request_id)
     except Exception:
-        # Provider query failures are transient from the customer's point of view. Keep
-        # the session pending so webhook/background reconciliation can still recover it.
-        return get_public_payment(public_id, status_token)
+        return
 
     code = str(result.get("ResultCode", ""))
     if code == "0":
         try:
-            await asyncio.to_thread(
-                complete_payment,
+            complete_payment(
                 public_id,
                 result.get("MpesaReceiptNumber"),
                 code,
                 result.get("ResultDesc"),
             )
         except Exception:
-            # complete_payment records provisioning_failed before re-raising. Return
-            # that durable state rather than turning a paid customer poll into a 500.
-            pass
+            # complete_payment records provisioning_failed before re-raising.
+            return
     elif code:
-        await asyncio.to_thread(
-            _mark_provider_query_failure,
-            public_id,
-            code,
-            result.get("ResultDesc"),
-        )
+        _mark_provider_query_failure(public_id, code, result.get("ResultDesc"))
 
-    return get_public_payment(public_id, status_token)
+
+def get_public_payment(public_id: str, status_token: str) -> dict:
+    request_id = None
+    should_query_mpesa = False
+    db = SessionLocal()
+    try:
+        row = crud.get_payment_session_by_public_id(db, public_id)
+        if row is None or not constant_time_token_matches(status_token, row.access_token_hash):
+            raise HTTPException(status_code=404, detail="Payment not found")
+        token_expires_at = row.created_at + timedelta(minutes=get_settings().payment_status_token_minutes)
+        if token_expires_at < datetime.utcnow():
+            raise HTTPException(status_code=404, detail="Payment not found")
+        if row.status in {"created", "pending"} and row.expires_at < datetime.utcnow():
+            row.status = "failed"
+            row.result_description = "Payment session expired"
+            db.commit()
+        elif row.status == "pending" and row.provider == "mpesa" and row.provider_request_id:
+            cutoff = datetime.utcnow() - timedelta(seconds=MPESA_STATUS_QUERY_SECONDS)
+            if row.updated_at <= cutoff:
+                # Claim this provider-query window so rapid browser polling does not
+                # query Daraja on every request. If the browser disappears, jobs.py
+                # can still reconcile the session after its normal stale cutoff.
+                row.updated_at = datetime.utcnow()
+                request_id = row.provider_request_id
+                db.commit()
+                should_query_mpesa = True
+        response = _public_response(row)
+    finally:
+        db.close()
+
+    if should_query_mpesa and request_id:
+        _query_pending_mpesa(public_id, request_id)
+        verify_db = SessionLocal()
+        try:
+            row = crud.get_payment_session_by_public_id(verify_db, public_id)
+            if row is None or not constant_time_token_matches(status_token, row.access_token_hash):
+                raise HTTPException(status_code=404, detail="Payment not found")
+            return _public_response(row)
+        finally:
+            verify_db.close()
+    return response
 
 
 async def process_mpesa_callback(values: dict) -> None:
