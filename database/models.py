@@ -50,6 +50,8 @@ class Router(Base):
     payment_provider = Column(String(32), nullable=False, default="mpesa")
     connection_mode = Column(String(32), nullable=False, default="l2tp")
     onboarding_status = Column(String(32), nullable=False, default="pending")
+    onboarding_download_hash = Column(String(64), nullable=True)
+    onboarding_script_encrypted = Column(Text, nullable=True)
     onboarding_token_hash = Column(String(64), nullable=True)
     onboarding_token_expires_at = Column(DateTime, nullable=True)
     last_seen_at = Column(DateTime, nullable=True)

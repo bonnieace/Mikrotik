@@ -101,3 +101,44 @@ python -m compileall -q .
 ```
 
 Live launch still requires sandbox and production-provider callback tests, a real RouterOS 6/7 smoke test, restore testing, and control-network/VPN validation. See [SECURITY.md](SECURITY.md) before any deployment.
+
+### Paste-to-connect router onboarding
+
+Deploy the backend first (`alembic upgrade head`, also run by the container entrypoint),
+then the web portals/mobile companion. Configure `API_PUBLIC_URL` as the exact HTTPS
+API origin, `ROUTER_CONTROL_HOST` as the reachable L2TP server, and the VPN agent as
+above. No Netlify storage or public static RSC directory is needed.
+
+Authenticated `POST /api/v1/routers/onboarding` now returns `install_command` and
+`download_url` alongside the existing `script`, `expires_at` and peer fields.
+Paste the entire command into the intended RouterOS terminal. It fetches using a
+separate random `X-Onboarding-Token` header and imports only after fetch succeeds.
+TLS certificate verification is mandatory, redirects are disabled, and the local
+RSC is removed after import success or failure. RouterOS needs a correct clock and
+trusted CA certificates; do not bypass validation to work around an old trust store.
+See [MikroTik Fetch documentation](https://help.mikrotik.com/docs/spaces/ROS/pages/8978514/Fetch).
+
+`GET /api/v1/router-onboarding/{router_uid}/script` redeems that scoped download
+capability once using an atomic database update. Missing/wrong/replayed/expired
+capabilities return the same 404. Tokens stay out of URLs; do not enable request
+header/body logging at the proxy. The payload is encrypted at rest, erased on
+redemption/claim, and cleared after expiry by the jobs worker. Responses are
+`no-store`. The existing independent claim token is still needed to register the
+assigned tunnel address; downloading does not imply a working router connection.
+
+Save the manual RSC privately before closing the setup bundle. A lost HTTP response
+may consume the download; import the saved RSC to retry before the claim expires.
+Do not create another router/payment history merely to retry an import. Existing
+clients can continue using the returned inline script during a rolling deployment.
+
+By default the script refuses an existing `uzanet-control` tunnel with another
+peer username. Explicit `replace_managed_tunnel: true` allows switching that
+UzaNet-marked tunnel to the new peer; this disconnects the previous router record.
+Unmarked name conflicts always stop. WAN/default routes, unrelated tunnels and
+hotspot HTML are preserved. The per-onboarding configuration backup is not
+overwritten on retry. Existing plans/customers/history are not migrated between
+records. Captive portal redirects remain a separate configuration step.
+
+Before live rollout, test the command on a spare MikroTik, including the target
+RouterOS version, certificate store, API firewall reachability, interrupted import,
+and explicitly replacing a managed tunnel. Automated tests do not execute RouterOS.
