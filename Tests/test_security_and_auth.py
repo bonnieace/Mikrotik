@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -52,3 +54,32 @@ def test_login_me_logout_revokes_token(db):
 
         assert client.post("/api/v1/auth/logout", headers=headers).status_code == 204
         assert client.get("/api/v1/me", headers=headers).status_code == 401
+
+
+def test_correct_password_can_clear_temporary_lock(db):
+    user = AdminUser(
+        username="locked-operator",
+        hashed_password=pwd_context.hash("correct-long-password"),
+        role="isp",
+        locked_until=datetime.utcnow() + timedelta(minutes=15),
+        failed_login_count=0,
+    )
+    db.add(user)
+    db.commit()
+
+    with TestClient(app) as client:
+        wrong = client.post(
+            "/api/v1/auth/token",
+            data={"username": "locked-operator", "password": "still-wrong-password"},
+        )
+        assert wrong.status_code == 429
+
+        correct = client.post(
+            "/api/v1/auth/token",
+            data={"username": "locked-operator", "password": "correct-long-password"},
+        )
+        assert correct.status_code == 200
+
+    db.refresh(user)
+    assert user.locked_until is None
+    assert user.failed_login_count == 0
