@@ -107,9 +107,6 @@ def create_hotspot_customer(router: Router, body: HotspotUserCreateRequest) -> d
             is_active=True,
         )
         db.add(row)
-        # Reserve the DB identity before touching RouterOS. A duplicate now fails here,
-        # so an existing router user's password/profile cannot be mutated by a request
-        # that ultimately returns 409.
         db.flush()
         provision_hotspot_access(
             router.id,
@@ -279,10 +276,10 @@ def prepare_paid_hotspot_session(db, payment_session: PaymentSession, package: P
     return str(user.id), password
 
 
-def cleanup_prepared_hotspot_session(db, payment_session: PaymentSession) -> None:
-    """Remove an unpaid prepared HotSpot account from RouterOS and the local DB."""
+def cleanup_prepared_hotspot_session(db, payment_session: PaymentSession) -> bool:
+    """Remove one unpaid prepared HotSpot account. Returns True when a row was cleaned."""
     if payment_session.service_type != "hotspot" or not payment_session.access_username:
-        return
+        return False
     user = (
         db.query(HotspotUser)
         .filter(
@@ -293,16 +290,46 @@ def cleanup_prepared_hotspot_session(db, payment_session: PaymentSession) -> Non
         .first()
     )
     if user is None:
-        return
-    try:
-        delete_hotspot_access(payment_session.router_id, payment_session.access_username)
-    except Exception:
-        # Prepared users are disabled, so cleanup failure cannot grant unpaid access.
-        return
+        return False
+    delete_hotspot_access(payment_session.router_id, payment_session.access_username)
     db.delete(user)
     payment_session.access_password_encrypted = None
     payment_session.credentials_expires_at = None
     db.flush()
+    return True
+
+
+def cleanup_failed_prepared_hotspot_sessions(limit: int = 200) -> dict:
+    """Best-effort cleanup for failed/expired payments that prepared disabled access."""
+    db = SessionLocal()
+    checked = 0
+    cleaned = 0
+    failed = 0
+    try:
+        rows = (
+            db.query(PaymentSession)
+            .filter(
+                PaymentSession.status == "failed",
+                PaymentSession.service_type == "hotspot",
+                PaymentSession.access_username.isnot(None),
+                PaymentSession.access_password_encrypted.isnot(None),
+            )
+            .order_by(PaymentSession.updated_at.asc())
+            .limit(limit)
+            .all()
+        )
+        checked = len(rows)
+        for row in rows:
+            try:
+                if cleanup_prepared_hotspot_session(db, row):
+                    cleaned += 1
+            except Exception:
+                db.rollback()
+                failed += 1
+        db.commit()
+        return {"checked": checked, "cleaned": cleaned, "failed": failed}
+    finally:
+        db.close()
 
 
 def provision_paid_session(db, payment_session: PaymentSession, package: Package) -> tuple[str, str]:
