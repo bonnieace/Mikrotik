@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
-import asyncio
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -24,7 +24,7 @@ from security import (
     payment_access_token,
     private_hash,
 )
-from services.access_service import provision_paid_session
+from services.access_service import prepare_paid_hotspot_session, provision_paid_session
 from services.payment_providers import initiate_provider, normalize_kenyan_phone, query_mpesa
 from settings import get_settings
 
@@ -111,6 +111,48 @@ def public_portal(portal_slug: str) -> dict:
         db.close()
 
 
+def _prepare_payment_access(public_id: str) -> bool:
+    """Prepare a HotSpot RouterOS user before payment confirmation.
+
+    Credentials remain encrypted in the payment session and are never serialized while
+    the session is pending. PPPoE renewals keep their existing post-payment path.
+    """
+    db = SessionLocal()
+    try:
+        row = crud.get_payment_session_by_public_id(db, public_id)
+        if row is None or row.service_type != "hotspot":
+            return False
+        package = db.query(Package).filter(Package.id == row.package_id).first()
+        if package is None:
+            raise HTTPException(status_code=404, detail="Package not found")
+        prepare_paid_hotspot_session(db, row, package)
+        crud.create_log(db, "Hotspot access prepared", router_id=row.router_id, event_type="payment.access_prepared")
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _log_prepare_failure(public_id: str) -> None:
+    db = SessionLocal()
+    try:
+        row = crud.get_payment_session_by_public_id(db, public_id)
+        if row is not None:
+            crud.create_log(
+                db,
+                "Hotspot access preparation failed; will retry after payment confirmation",
+                router_id=row.router_id,
+                level="error",
+                event_type="payment.access_prepare_failed",
+            )
+            db.commit()
+    finally:
+        db.close()
+
+
 async def create_public_payment(
     portal_slug: str,
     body: PublicPaymentRequest,
@@ -182,9 +224,18 @@ async def create_public_payment(
     finally:
         db.close()
 
-    try:
-        initiation = await initiate_provider(provider, phone, amount, public_id)
-    except Exception as exc:
+    provider_task = asyncio.create_task(initiate_provider(provider, phone, amount, public_id))
+    prepare_task = asyncio.create_task(asyncio.to_thread(_prepare_payment_access, public_id))
+    initiation_result, preparation_result = await asyncio.gather(
+        provider_task,
+        prepare_task,
+        return_exceptions=True,
+    )
+
+    if isinstance(preparation_result, Exception):
+        await asyncio.to_thread(_log_prepare_failure, public_id)
+
+    if isinstance(initiation_result, Exception):
         failed_db = SessionLocal()
         try:
             failed = crud.get_payment_session_by_public_id(failed_db, public_id)
@@ -194,10 +245,11 @@ async def create_public_payment(
                 failed_db.commit()
         finally:
             failed_db.close()
-        if isinstance(exc, HTTPException):
-            raise
-        raise HTTPException(status_code=502, detail="Payment provider is unavailable") from exc
+        if isinstance(initiation_result, HTTPException):
+            raise initiation_result
+        raise HTTPException(status_code=502, detail="Payment provider is unavailable") from initiation_result
 
+    initiation = initiation_result
     update_db = SessionLocal()
     try:
         row = crud.get_payment_session_by_public_id(update_db, public_id)
@@ -228,6 +280,74 @@ def get_public_payment(public_id: str, status_token: str) -> dict:
         return _public_response(row)
     finally:
         db.close()
+
+
+def _pending_mpesa_request_id(public_id: str, status_token: str) -> str | None:
+    db = SessionLocal()
+    try:
+        row = crud.get_payment_session_by_public_id(db, public_id)
+        if row is None or not constant_time_token_matches(status_token, row.access_token_hash):
+            raise HTTPException(status_code=404, detail="Payment not found")
+        if row.provider != "mpesa" or row.status != "pending":
+            return None
+        return row.provider_request_id
+    finally:
+        db.close()
+
+
+def _mark_provider_query_failure(public_id: str, code: str, description: str | None) -> None:
+    db = SessionLocal()
+    try:
+        row = crud.get_payment_session_by_public_id(db, public_id)
+        if row and row.status == "pending":
+            row.status = "failed"
+            row.result_code = code[:32]
+            row.result_description = str(description or "Payment failed")[:255]
+            db.commit()
+    finally:
+        db.close()
+
+
+async def get_public_payment_authoritative(public_id: str, status_token: str) -> dict:
+    """Return public status, querying Daraja directly while an M-Pesa payment is pending."""
+    snapshot = get_public_payment(public_id, status_token)
+    if snapshot["status"] != "pending" or snapshot["provider"] != "mpesa":
+        return snapshot
+
+    request_id = _pending_mpesa_request_id(public_id, status_token)
+    if not request_id:
+        return snapshot
+
+    try:
+        result = await query_mpesa(request_id)
+    except Exception:
+        # Provider query failures are transient from the customer's point of view. Keep
+        # the session pending so webhook/background reconciliation can still recover it.
+        return get_public_payment(public_id, status_token)
+
+    code = str(result.get("ResultCode", ""))
+    if code == "0":
+        try:
+            await asyncio.to_thread(
+                complete_payment,
+                public_id,
+                result.get("MpesaReceiptNumber"),
+                code,
+                result.get("ResultDesc"),
+            )
+        except Exception:
+            # complete_payment records provisioning_failed before re-raising. Return
+            # that durable state rather than turning a paid customer poll into a 500.
+            pass
+    elif code:
+        await asyncio.to_thread(
+            _mark_provider_query_failure,
+            public_id,
+            code,
+            result.get("ResultDesc"),
+        )
+
+    return get_public_payment(public_id, status_token)
 
 
 async def process_mpesa_callback(values: dict) -> None:
@@ -422,17 +542,13 @@ async def reconcile_pending_payments(limit: int = 25) -> dict:
             )
             provisioned += 1
         elif code:
-            update_db = SessionLocal()
-            try:
-                row = crud.get_payment_session_by_public_id(update_db, public_id)
-                if row and row.status == "pending":
-                    row.status = "failed"
-                    row.result_code = code[:32]
-                    row.result_description = str(result.get("ResultDesc") or "Payment failed")[:255]
-                    update_db.commit()
-                    failed += 1
-            finally:
-                update_db.close()
+            await asyncio.to_thread(
+                _mark_provider_query_failure,
+                public_id,
+                code,
+                result.get("ResultDesc"),
+            )
+            failed += 1
         else:
             still_pending += 1
     return {"checked": len(candidates), "provisioned": provisioned, "failed": failed, "pending": still_pending}
