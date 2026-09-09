@@ -140,7 +140,7 @@ def get_settings() -> Settings:
         router_control_host=os.getenv("ROUTER_CONTROL_HOST", ""),
         router_control_cidr=os.getenv("ROUTER_CONTROL_CIDR", "10.10.10.0/24"),
         router_allowed_cidrs=_csv("ROUTER_ALLOWED_CIDRS", os.getenv("ROUTER_CONTROL_CIDR", "10.10.10.0/24")),
-        onboarding_token_minutes=int(os.getenv("ONBOARDING_TOKEN_MINUTES", "30")),
+        onboarding_token_minutes=int(os.getenv("ONBOARDING_TOKEN_MINUTES", "120")),
         vpn_agent_socket=os.getenv("VPN_AGENT_SOCKET", "").strip(),
         vpn_agent_shared_secret=os.getenv("VPN_AGENT_SHARED_SECRET", ""),
         vpn_agent_timeout_seconds=float(os.getenv("VPN_AGENT_TIMEOUT_SECONDS", "3")),
