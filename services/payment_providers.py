@@ -50,9 +50,32 @@ async def _mpesa_token(client: httpx.AsyncClient, settings: Settings) -> str:
     return token
 
 
+def _mpesa_token_sync(client: httpx.Client, settings: Settings) -> str:
+    response = client.get(
+        f"{settings.mpesa_base_url}/oauth/v1/generate",
+        params={"grant_type": "client_credentials"},
+        auth=(settings.mpesa_consumer_key, settings.mpesa_consumer_secret),
+    )
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="M-Pesa authorization is unavailable")
+    token = response.json().get("access_token")
+    if not token:
+        raise HTTPException(status_code=502, detail="M-Pesa returned an invalid authorization response")
+    return token
+
+
 def _mpesa_password(settings: Settings, timestamp: str) -> str:
     value = settings.mpesa_business_short_code + settings.mpesa_passkey + timestamp
     return base64.b64encode(value.encode("utf-8")).decode("ascii")
+
+
+def _mpesa_query_payload(settings: Settings, checkout_request_id: str, timestamp: str) -> dict:
+    return {
+        "BusinessShortCode": settings.mpesa_business_short_code,
+        "Password": _mpesa_password(settings, timestamp),
+        "Timestamp": timestamp,
+        "CheckoutRequestID": checkout_request_id,
+    }
 
 
 async def initiate_mpesa(phone: str, amount: Decimal, public_id: str) -> ProviderInitiation:
@@ -97,12 +120,23 @@ async def query_mpesa(checkout_request_id: str) -> dict:
         response = await client.post(
             f"{settings.mpesa_base_url}/mpesa/stkpushquery/v1/query",
             headers={"Authorization": f"Bearer {token}"},
-            json={
-                "BusinessShortCode": settings.mpesa_business_short_code,
-                "Password": _mpesa_password(settings, timestamp),
-                "Timestamp": timestamp,
-                "CheckoutRequestID": checkout_request_id,
-            },
+            json=_mpesa_query_payload(settings, checkout_request_id, timestamp),
+        )
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="M-Pesa verification is unavailable")
+    return response.json()
+
+
+def query_mpesa_sync(checkout_request_id: str) -> dict:
+    """Synchronous STK status query for the existing sync public-status service path."""
+    settings = get_settings()
+    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    with httpx.Client(timeout=PROVIDER_TIMEOUT) as client:
+        token = _mpesa_token_sync(client, settings)
+        response = client.post(
+            f"{settings.mpesa_base_url}/mpesa/stkpushquery/v1/query",
+            headers={"Authorization": f"Bearer {token}"},
+            json=_mpesa_query_payload(settings, checkout_request_id, timestamp),
         )
     if response.status_code != 200:
         raise HTTPException(status_code=502, detail="M-Pesa verification is unavailable")
@@ -204,4 +238,3 @@ def kopokopo_callback_values(payload: dict) -> dict:
         "receipt": resource.get("reference"),
         "phone": str(resource.get("sender_phone_number", "")).lstrip("+"),
     }
-

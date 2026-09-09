@@ -200,28 +200,78 @@ def delete_customer(router: Router, service_type: str, user_uid: str) -> None:
         db.close()
 
 
-def provision_paid_session(db, payment_session: PaymentSession, package: Package) -> tuple[str, str]:
-    """Provision deterministically so callback retries cannot create duplicate RouterOS users."""
-    now = datetime.utcnow()
+def _payment_credentials(db, payment_session: PaymentSession, package: Package) -> tuple[str, str]:
     if payment_session.access_username and payment_session.access_password_encrypted:
-        username = payment_session.access_username
-        password = decrypt_secret(payment_session.access_password_encrypted)
+        return payment_session.access_username, decrypt_secret(payment_session.access_password_encrypted)
+
+    username = _new_username("hs-" if package.service_type == "hotspot" else "", payment_session.public_id)
+    password = _new_password()
+    payment_session.access_username = username
+    payment_session.access_password_encrypted = encrypt_secret(password)
+    payment_session.credentials_expires_at = datetime.utcnow() + timedelta(minutes=30)
+    db.flush()
+    return username, password
+
+
+def prepare_paid_hotspot_session(db, payment_session: PaymentSession, package: Package) -> tuple[str, str]:
+    """Create the paid HotSpot account before payment confirmation without releasing its credentials."""
+    if package.service_type != "hotspot":
+        raise HTTPException(status_code=422, detail="Only HotSpot sessions can be prepared before payment")
+
+    username, password = _payment_credentials(db, payment_session, package)
+    provision_hotspot_access(
+        payment_session.router_id,
+        username,
+        password,
+        package.router_profile,
+        package.validity_minutes,
+    )
+    user = (
+        db.query(HotspotUser)
+        .filter(HotspotUser.router_id == payment_session.router_id, HotspotUser.otp == username)
+        .first()
+    )
+    if user is None:
+        user = HotspotUser(
+            phone_number=payment_session.phone_number,
+            amount=payment_session.amount,
+            otp=username,
+            password_encrypted=encrypt_secret(password),
+            expires_at=None,
+            router_id=payment_session.router_id,
+            package_id=package.id,
+            is_active=True,
+        )
+        db.add(user)
     else:
-        username = _new_username("hs-" if package.service_type == "hotspot" else "", payment_session.public_id)
-        password = _new_password()
-        payment_session.access_username = username
-        payment_session.access_password_encrypted = encrypt_secret(password)
-        payment_session.credentials_expires_at = now + timedelta(minutes=30)
-        db.flush()
+        user.phone_number = payment_session.phone_number
+        user.amount = payment_session.amount
+        user.password_encrypted = encrypt_secret(password)
+        user.package_id = package.id
+        user.is_active = True
+    db.flush()
+    return str(user.id), password
+
+
+def provision_paid_session(db, payment_session: PaymentSession, package: Package) -> tuple[str, str]:
+    """Finalize paid access idempotently; prepared HotSpot users are not recreated or extended twice."""
+    now = datetime.utcnow()
 
     if package.service_type == "hotspot":
-        provision_hotspot_access(payment_session.router_id, username, password, package.router_profile, package.validity_minutes)
+        username, password = _payment_credentials(db, payment_session, package)
         user = (
             db.query(HotspotUser)
             .filter(HotspotUser.router_id == payment_session.router_id, HotspotUser.otp == username)
             .first()
         )
         if user is None:
+            provision_hotspot_access(
+                payment_session.router_id,
+                username,
+                password,
+                package.router_profile,
+                package.validity_minutes,
+            )
             user = HotspotUser(
                 phone_number=payment_session.phone_number,
                 amount=payment_session.amount,
@@ -229,10 +279,17 @@ def provision_paid_session(db, payment_session: PaymentSession, package: Package
                 password_encrypted=encrypt_secret(password),
                 router_id=payment_session.router_id,
                 package_id=package.id,
+                is_active=True,
             )
             db.add(user)
+            db.flush()
+        user.phone_number = payment_session.phone_number
+        user.amount = payment_session.amount
+        user.password_encrypted = encrypt_secret(password)
+        user.package_id = package.id
         user.is_active = True
-        user.expires_at = max(user.expires_at or now, now) + timedelta(minutes=package.validity_minutes)
+        if user.expires_at is None:
+            user.expires_at = now + timedelta(minutes=package.validity_minutes)
         db.flush()
         return str(user.id), password
 
@@ -252,4 +309,3 @@ def provision_paid_session(db, payment_session: PaymentSession, package: Package
     payment_session.credentials_expires_at = None
     db.flush()
     return str(user.id), ""
-
