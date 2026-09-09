@@ -301,35 +301,41 @@ def cleanup_prepared_hotspot_session(db, payment_session: PaymentSession) -> boo
 
 def cleanup_failed_prepared_hotspot_sessions(limit: int = 200) -> dict:
     """Best-effort cleanup for failed/expired payments that prepared disabled access."""
-    db = SessionLocal()
-    checked = 0
+    discovery_db = SessionLocal()
+    try:
+        public_ids = [
+            row.public_id
+            for row in (
+                discovery_db.query(PaymentSession)
+                .filter(
+                    PaymentSession.status == "failed",
+                    PaymentSession.service_type == "hotspot",
+                    PaymentSession.access_username.isnot(None),
+                    PaymentSession.access_password_encrypted.isnot(None),
+                )
+                .order_by(PaymentSession.updated_at.asc())
+                .limit(limit)
+                .all()
+            )
+        ]
+    finally:
+        discovery_db.close()
+
     cleaned = 0
     failed = 0
-    try:
-        rows = (
-            db.query(PaymentSession)
-            .filter(
-                PaymentSession.status == "failed",
-                PaymentSession.service_type == "hotspot",
-                PaymentSession.access_username.isnot(None),
-                PaymentSession.access_password_encrypted.isnot(None),
-            )
-            .order_by(PaymentSession.updated_at.asc())
-            .limit(limit)
-            .all()
-        )
-        checked = len(rows)
-        for row in rows:
-            try:
-                if cleanup_prepared_hotspot_session(db, row):
-                    cleaned += 1
-            except Exception:
-                db.rollback()
-                failed += 1
-        db.commit()
-        return {"checked": checked, "cleaned": cleaned, "failed": failed}
-    finally:
-        db.close()
+    for public_id in public_ids:
+        db = SessionLocal()
+        try:
+            row = crud.get_payment_session_by_public_id(db, public_id)
+            if row is not None and row.status == "failed" and cleanup_prepared_hotspot_session(db, row):
+                db.commit()
+                cleaned += 1
+        except Exception:
+            db.rollback()
+            failed += 1
+        finally:
+            db.close()
+    return {"checked": len(public_ids), "cleaned": cleaned, "failed": failed}
 
 
 def provision_paid_session(db, payment_session: PaymentSession, package: Package) -> tuple[str, str]:
