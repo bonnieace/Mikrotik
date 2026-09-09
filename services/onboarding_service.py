@@ -1,4 +1,4 @@
-"""Generate and claim one-time, idempotent RouterOS onboarding scripts.
+"""Generate, download, and claim idempotent RouterOS onboarding scripts.
 
 The script touches only Uzanet-owned objects, creates a pre-change backup, and aborts when
 an object with a reserved name exists without the Uzanet ownership marker.
@@ -55,8 +55,8 @@ def _fetch_compatible(command: str, arguments: str = "") -> str:
     """Probe syntax without network I/O; RouterOS <7.18 cannot follow redirects.
 
     Keep unsupported options inside :parse strings so v6 can parse the outer RSC.
-    Catch only compilation, never fetch execution: HTTP failure must not redeem a
-    one-time capability again or retry a registration request.
+    Catch only compilation, never fetch execution: HTTP failure must not trigger a
+    second registration request.
     """
     modern = _ros_quote(command + " http-max-redirect-count=0")
     legacy = _ros_quote(command)
@@ -89,7 +89,7 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
         'http-data=$body keep-result=no',
         ' body=$claimBody',
     )
-    return rf'''# Uzanet managed onboarding — one-time token, expires automatically
+    return rf'''# Uzanet managed onboarding — scoped token, expires automatically
 # This script preserves WAN/default routes and aborts on reserved-name conflicts.
 :local managedComment "{values['comment']}"
 :local tunnelName "uzanet-control"
@@ -110,9 +110,9 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
     :if (!$replaceTunnel) do={{ :error "Existing Uzanet tunnel belongs to another router record. Enable replacement explicitly or use that record." }}
     /interface l2tp-client disable $existingTunnel
   }}
-  /interface l2tp-client set $existingTunnel connect-to="{values['host']}" user="{values['l2tp_user']}" password="{values['l2tp_password']}" allow=mschap2 add-default-route=no use-peer-dns=no disabled=no
+  /interface l2tp-client set $existingTunnel connect-to="{values['host']}" user="{values['l2tp_user']}" password="{values['l2tp_password']}" profile=default allow=chap use-ipsec=no add-default-route=no use-peer-dns=no disabled=no
 }} else={{
-  /interface l2tp-client add name=$tunnelName comment=$managedComment connect-to="{values['host']}" user="{values['l2tp_user']}" password="{values['l2tp_password']}" allow=mschap2 add-default-route=no use-peer-dns=no disabled=no
+  /interface l2tp-client add name=$tunnelName comment=$managedComment connect-to="{values['host']}" user="{values['l2tp_user']}" password="{values['l2tp_password']}" profile=default allow=chap use-ipsec=no add-default-route=no use-peer-dns=no disabled=no
 }}
 
 :local existingGroup [/user group find where name=$groupName]
@@ -134,14 +134,15 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
 
 :local tunnelAddress ""
 :for attempt from=1 to=12 do={{
-  :local addrId [/ip address find where interface=$tunnelName]
-  :if ([:len $addrId] = 1) do={{
-    :local candidate [/ip address get $addrId address]
-    :local candidateIP [:pick $candidate 0 [:find $candidate "/"]]
-    :if (("{values['expected_ip']}" = "") || ($candidateIP = "{values['expected_ip']}")) do={{ :set tunnelAddress $candidate }}
+  :if ([:len $tunnelAddress] = 0) do={{
+    :local addrId [/ip address find where interface=$tunnelName]
+    :if ([:len $addrId] = 1) do={{
+      :local candidate [/ip address get $addrId address]
+      :local candidateIP [:pick $candidate 0 [:find $candidate "/"]]
+      :if (("{values['expected_ip']}" = "") || ($candidateIP = "{values['expected_ip']}")) do={{ :set tunnelAddress $candidate }}
+    }}
+    :if ([:len $tunnelAddress] = 0) do={{ :delay 5s }}
   }}
-  :if ([:len $tunnelAddress] > 0) do={{ :break }}
-  :delay 5s
 }}
 :if ([:len $tunnelAddress] = 0) do={{ :error "Uzanet tunnel did not receive an address" }}
 
@@ -150,6 +151,11 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
 {claim_fetch}
 :put "Uzanet registration accepted. Check connection status in the portal."
 '''
+
+
+def _tls_preflight_command() -> str:
+    settings = get_settings()
+    return f'/tool fetch url="{settings.api_public_url}/health/live" check-certificate=yes keep-result=no'
 
 
 def create_onboarding(body: RouterOnboardingRequest, current_user: AdminUser) -> dict:
@@ -205,6 +211,8 @@ def create_onboarding(body: RouterOnboardingRequest, current_user: AdminUser) ->
             "script": script,
             "download_url": download_url,
             "install_command": _install_command(router.uid, download_url, download_token),
+            "tls_preflight_command": _tls_preflight_command(),
+            "legacy_ca_common_name": "ISRG Root X1",
             "l2tp_peer": {
                 "username": peer_username,
                 "password": l2tp_password,
@@ -228,8 +236,8 @@ def create_onboarding(body: RouterOnboardingRequest, current_user: AdminUser) ->
 
 
 def _install_command(router_uid: str, url: str, token: str) -> str:
-    # One scoped line: store the fetch source and filename once. Probe syntax
-    # before execution, and never import an old/partial file after fetch failure.
+    # One scoped line. Remove only a stale file before fetching, retain a freshly
+    # downloaded RSC when import fails, and delete it only after successful setup.
     filename = _ros_quote(f"uzanet-{router_uid}.rsc")
     command = _ros_quote(
         f'/tool fetch url="{_ros_quote(url)}" '
@@ -237,43 +245,40 @@ def _install_command(router_uid: str, url: str, token: str) -> str:
         'check-certificate=yes dst-path=$path'
     )
     return (
-        f'{{:local p "{filename}";:local c "{command}";:local f;'
+        f'{{:local p "{filename}";:do {{/file remove [/file find where name=$p]}} on-error={{}};'
+        f':local c "{command}";:local f;'
         ':do {:set f [:parse ($c." http-max-redirect-count=0")]} '
         'on-error={:set f [:parse $c]};:local e false;'
-        ':do {$f path=$p;/import file-name=$p} on-error={:set e true};'
-        ':do {/file remove [/file find where name=$p]} on-error={};'
-        ':if ($e) do={:error "Setup failed; check connection and use saved RSC before expiry"}}'
+        ':do {$f path=$p} on-error={:set e true};'
+        ':if ($e) do={:error "Download failed; check connection, clock and CA trust"};'
+        ':do {/import file-name=$p} on-error={:set e true};'
+        ':if ($e) do={:error "Setup failed; downloaded RSC was kept for retry"};'
+        ':do {/file remove [/file find where name=$p]} on-error={}}'
     )
 
 
 def consume_onboarding_script(router_uid: str, token: str) -> str:
-    """Atomically redeem a scoped download capability, independently of claim."""
+    """Return a scoped RSC while its pending onboarding capability remains valid.
+
+    Downloads are intentionally retryable until claim or expiry. This prevents a
+    successful HTTP response followed by a RouterOS/file/import failure from burning
+    the only copy of the onboarding script.
+    """
     if not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
         raise HTTPException(status_code=404, detail="Onboarding download is unavailable")
     db = SessionLocal()
     try:
-        query = db.query(Router).filter(
+        router = db.query(Router).filter(
             Router.uid == router_uid,
             Router.onboarding_download_hash == hash_token(token),
             Router.onboarding_token_expires_at > datetime.utcnow(),
             Router.onboarding_status == "pending",
             Router.onboarding_script_encrypted.isnot(None),
             Router.owner_id.in_(db.query(AdminUser.id).filter(AdminUser.is_active.is_(True))),
-        )
-        router = query.first()
+        ).first()
         if router is None:
             raise HTTPException(status_code=404, detail="Onboarding download is unavailable")
-        script = decrypt_secret(router.onboarding_script_encrypted)
-        # Conditional UPDATE is also safe with multiple workers; only one wins.
-        changed = query.update({
-            Router.onboarding_download_hash: None,
-            Router.onboarding_script_encrypted: None,
-        }, synchronize_session=False)
-        if changed != 1:
-            db.rollback()
-            raise HTTPException(status_code=404, detail="Onboarding download is unavailable")
-        db.commit()
-        return script
+        return decrypt_secret(router.onboarding_script_encrypted)
     finally:
         db.close()
 
