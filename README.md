@@ -150,16 +150,14 @@ overwritten on retry. Existing plans/customers/history are not migrated between
 records. Captive portal redirects remain a separate configuration step.
 
 RouterOS 6.49 compatibility: the generated RSC avoids `:break`, uses the deployed
-CHAP-compatible L2TP settings (`profile=default allow=chap use-ipsec=no`), and probes
-the redirect option with `:parse` before making an HTTP request. RouterOS 7.18
-introduced automatic redirect support and its `http-max-redirect-count` option
-([MikroTik changelog](https://forum.mikrotik.com/t/v7-18beta-testing-is-released/181371)).
-Older versions omit the unsupported option; newer versions explicitly set it to
-zero. Certificate validation stays enabled on both paths. Network errors never
-trigger a fallback fetch or automatic claim retry. This is generated server-side,
-so portal/mobile clients receive the compatibility fix without a separate UI update.
-Already-issued RSC bundles remain immutable; the fix applies to newly generated
-bundles.
+CHAP-compatible L2TP settings (`profile=default allow=chap use-ipsec=no`), and uses
+only `/tool fetch` options shared by RouterOS 6 and 7. The Uzanet onboarding endpoints
+do not require redirects, so the generator deliberately does not emit the newer
+`http-max-redirect-count` option. Certificate validation remains enabled. Network
+errors never trigger a second fetch or automatic claim retry. This is generated
+server-side, so portal/mobile clients receive the compatibility fix without a separate
+UI update. Already-issued RSC bundles remain immutable; the fix applies to newly
+generated bundles.
 
 The setup command remains a compact single line. The download token stays in a
 header, not the URL. No public bootstrap endpoint is added, and existing web/mobile
