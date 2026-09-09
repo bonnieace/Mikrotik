@@ -1,16 +1,18 @@
 """Generate, download, and claim idempotent RouterOS onboarding scripts.
 
-The script touches only Uzanet-owned objects, creates a pre-change backup, and aborts when
-an object with a reserved name exists without the Uzanet ownership marker.
+The script keeps Uzanet-owned control objects isolated, creates a pre-change backup, and aborts
+on reserved-name conflicts. When HotSpot is enabled it preserves the active HTML directory,
+creates a managed copy, and switches the profile only after the ISP-aware redirect is fetched.
 """
 
 from __future__ import annotations
 
 import ipaddress
+import os
 import re
 import secrets
 from datetime import datetime, timedelta
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -51,7 +53,35 @@ def _valid_claim_ip(value: str) -> str:
     return str(address)
 
 
-def _fetch_compatible(command: str, arguments: str = "") -> str:
+def _portal_public_origin() -> str:
+    """Return the browser origin used for public customer portals.
+
+    PORTAL_PUBLIC_URL is preferred so multi-origin production deployments are deterministic.
+    Existing single-origin deployments remain compatible by falling back to the first valid
+    HTTPS CORS origin.
+    """
+    explicit = os.getenv("PORTAL_PUBLIC_URL", "").strip().rstrip("/")
+    candidates = [explicit] if explicit else list(get_settings().cors_origins)
+    for candidate in candidates:
+        parsed = urlsplit(candidate)
+        if (
+            parsed.scheme == "https"
+            and parsed.hostname
+            and not parsed.username
+            and not parsed.password
+            and not parsed.query
+            and not parsed.fragment
+            and parsed.path in {"", "/"}
+        ):
+            return candidate.rstrip("/")
+    return ""
+
+
+def _portal_identity(router: Router) -> str | None:
+    return router.owner.username if router.owner else None
+
+
+def _fetch_compatible(command: str, arguments: str = "", variable: str = "uzanetFetch") -> str:
     """Emit a parsed fetch command using syntax shared by RouterOS 6 and 7.
 
     The onboarding endpoints do not redirect, so avoid newer redirect-only options.
@@ -59,11 +89,27 @@ def _fetch_compatible(command: str, arguments: str = "") -> str:
     but then fail when the parsed command executes, bypassing an on-error fallback.
     """
     compatible = _ros_quote(command)
-    return f':local uzanetFetch [:parse "{compatible}"]; $uzanetFetch{arguments}'
+    return f':local {variable} [:parse "{compatible}"]; ${variable}{arguments}'
 
 
-def _build_script(router: Router, claim_token: str, api_password: str, l2tp_password: str, replace_managed_tunnel: bool = False) -> str:
+def _build_script(
+    router: Router,
+    claim_token: str,
+    api_password: str,
+    l2tp_password: str,
+    replace_managed_tunnel: bool = False,
+    isp_identifier: str | None = None,
+) -> str:
     settings = get_settings()
+    isp_identifier = isp_identifier or _portal_identity(router)
+    portal_origin = _portal_public_origin()
+    portal_template_url = ""
+    if portal_origin and isp_identifier and router.portal_enabled:
+        portal_template_url = (
+            f"{portal_origin}/hotspot-login/{quote(isp_identifier, safe='')}/"
+            f"{quote(router.portal_slug, safe='')}"
+        )
+
     values = {
         "backup": _ros_quote(f"uzanet-pre-onboard-{router.uid.split('-')[0]}"),
         "comment": MANAGED_COMMENT,
@@ -76,6 +122,8 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
         "l2tp_password": _ros_quote(l2tp_password),
         "claim_url": _ros_quote(f"{settings.api_public_url}/api/v1/router-onboarding/claim"),
         "token": _ros_quote(claim_token),
+        "portal_template_url": _ros_quote(portal_template_url),
+        "managed_hotspot_suffix": _ros_quote(f"-uzanet-{router.uid.split('-')[0]}"),
     }
     claim_fetch = _fetch_compatible(
         f'/tool fetch url="{values["claim_url"]}" check-certificate=yes '
@@ -83,6 +131,56 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
         'http-data=$body keep-result=no',
         ' body=$claimBody',
     )
+
+    hotspot_block = ""
+    if values["portal_template_url"]:
+        portal_fetch = _fetch_compatible(
+            f'/tool fetch url="{values["portal_template_url"]}" check-certificate=yes dst-path=$path',
+            ' path=$loginPath',
+            variable="uzanetPortalFetch",
+        )
+        hotspot_block = rf'''
+# Preserve the current HotSpot HTML set. A managed copy is activated only after its
+# ISP-aware login redirect has downloaded successfully. Failure here does not undo
+# control-plane onboarding; it leaves the existing HotSpot portal untouched.
+:local portalSynced false
+:local hotspotServers [/ip hotspot find where disabled=no]
+:if ([:len $hotspotServers] > 0) do={{
+  :foreach hotspotId in=$hotspotServers do={{
+    :local profileName [/ip hotspot get $hotspotId profile]
+    :local profileId [/ip hotspot profile find where name=$profileName]
+    :if ([:len $profileId] = 1) do={{
+      :local baseDir [/ip hotspot profile get $profileId html-directory]
+      :if ([:len $baseDir] = 0) do={{ :set baseDir "hotspot" }}
+      :local sourceDir $baseDir
+      :local overrideDir ""
+      :do {{ :set overrideDir [/ip hotspot profile get $profileId html-directory-override] }} on-error={{}}
+      :if ([:len $overrideDir] > 0) do={{ :set sourceDir $overrideDir }}
+      :local managedDir ($baseDir . "{values['managed_hotspot_suffix']}")
+      :if ([:len [/file find where name=$managedDir]] = 0) do={{
+        :local sourceItem [/file find where name=$sourceDir]
+        :if ([:len $sourceItem] > 0) do={{
+          :do {{ /file copy $sourceItem name=$managedDir }} on-error={{ :log warning "Uzanet portal: could not copy HotSpot HTML directory" }}
+          :delay 1s
+        }}
+      }}
+      :if ([:len [/file find where name=$managedDir]] > 0) do={{
+        :local loginPath ($managedDir . "/login.html")
+        :local syncFailed false
+        :do {{
+          {portal_fetch}
+        }} on-error={{ :set syncFailed true }}
+        :if (!$syncFailed) do={{
+          :do {{ /ip hotspot profile set $profileId html-directory-override=$managedDir }} on-error={{ :set syncFailed true }}
+        }}
+        :if (!$syncFailed) do={{ :set portalSynced true }}
+      }}
+    }}
+  }}
+  :if (!$portalSynced) do={{ :log warning "Uzanet portal redirect was not changed; existing HotSpot HTML remains active" }}
+}}
+'''
+
     return rf'''# Uzanet managed onboarding — scoped token, expires automatically
 # This script preserves WAN/default routes and aborts on reserved-name conflicts.
 :local managedComment "{values['comment']}"
@@ -125,7 +223,7 @@ def _build_script(router: Router, claim_token: str, api_password: str, l2tp_pass
 }}
 
 :if ([/ip service get api disabled]) do={{ /ip service enable api }}
-
+{hotspot_block}
 :local tunnelAddress ""
 :for attempt from=1 to=12 do={{
   :if ([:len $tunnelAddress] = 0) do={{
@@ -192,7 +290,14 @@ def create_onboarding(body: RouterOnboardingRequest, current_user: AdminUser) ->
             peer_provisioned = True
             router.ip_address = _valid_claim_ip(assigned_ip)
         crud.create_log(db, "Router onboarding created", router_id=router.id, event_type="router.onboarding.created")
-        script = _build_script(router, claim_token, api_password, l2tp_password, body.replace_managed_tunnel)
+        script = _build_script(
+            router,
+            claim_token,
+            api_password,
+            l2tp_password,
+            body.replace_managed_tunnel,
+            current_user.username,
+        )
         download_token = secrets.token_urlsafe(32)
         router.onboarding_download_hash = hash_token(download_token)
         router.onboarding_script_encrypted = encrypt_secret(script)
@@ -321,13 +426,21 @@ def claim_onboarding(token: str, tunnel_ip: str, routeros_version: str | None) -
 
 
 def serialize_router(router: Router) -> dict:
+    isp_identifier = _portal_identity(router)
+    portal_path = (
+        f"/portal/{quote(isp_identifier, safe='')}/{quote(router.portal_slug, safe='')}"
+        if isp_identifier
+        else f"/portal/{quote(router.portal_slug, safe='')}"
+    )
     return {
         "uid": router.uid,
         "name": router.name,
         "ip_address": router.ip_address,
         "port": router.port,
         "username": router.username,
+        "isp_identifier": isp_identifier,
         "portal_slug": router.portal_slug,
+        "portal_path": portal_path,
         "portal_enabled": router.portal_enabled,
         "payment_provider": router.payment_provider,
         "connection_mode": router.connection_mode,
