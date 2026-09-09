@@ -156,10 +156,22 @@ def _traffic_interface(api) -> str:
     raise HTTPException(status_code=502, detail="Router returned no usable interface")
 
 
+def _monitor_traffic_once(api, interface: str) -> list[dict]:
+    """Run `/interface monitor-traffic <name> once` using librouteros Path semantics."""
+    try:
+        # `monitor-traffic` is the command under /interface. `once` is an API
+        # argument, not a path segment/subcommand.
+        return list(api.path("interface")("monitor-traffic", interface=interface, once=""))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Router traffic monitoring failed") from exc
+
+
 def fetch_rt_rx_tx_data(router_id: int):
     with router_api(router_id) as api:
         interface = _traffic_interface(api)
-        result = list(api.path("interface", "monitor-traffic")("once", interface=interface))
+        result = _monitor_traffic_once(api, interface)
     if not result:
         raise HTTPException(status_code=502, detail="Router returned no traffic data")
     return {
