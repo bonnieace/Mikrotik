@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
 from database.models import AdminUser, Package, Payment, PaymentSession, Router
 from schemas import PublicPaymentRequest
 from services import payment_service
-from services.payment_providers import ProviderInitiation, verify_kopokopo_signature
+from services.payment_providers import ProviderInitiation, _mpesa_query_response, verify_kopokopo_signature
 from services.payment_service import complete_payment, create_public_payment, get_public_payment, list_payment_sessions
 
 
@@ -69,6 +70,22 @@ async def test_public_payment_uses_server_price_and_is_idempotent(db, monkeypatc
     admin_rows = list_payment_sessions(_router)
     assert admin_rows[0]["phone_number"] == "254****678"
     assert "status_token" not in admin_rows[0]
+
+
+def test_mpesa_query_processing_response_is_pending_even_when_http_is_non_200():
+    response = httpx.Response(
+        500,
+        json={
+            "errorCode": "500.001.1001",
+            "errorMessage": "The transaction is being processed",
+        },
+    )
+
+    result = _mpesa_query_response(response)
+
+    assert result["pending"] is True
+    assert result["errorCode"] == "500.001.1001"
+    assert "ResultCode" not in result
 
 
 def test_kopokopo_signature_is_required(monkeypatch):
