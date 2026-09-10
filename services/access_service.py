@@ -235,7 +235,7 @@ def _payment_credentials(db, payment_session: PaymentSession, package: Package) 
 
 
 def prepare_paid_hotspot_session(db, payment_session: PaymentSession, package: Package) -> tuple[str, str]:
-    """Prepare a disabled paid HotSpot account without granting unpaid access."""
+    """Create paid HotSpot credentials on RouterOS before payment confirmation without exposing them."""
     if package.service_type != "hotspot":
         raise HTTPException(status_code=422, detail="Only HotSpot sessions can be prepared before payment")
 
@@ -246,7 +246,7 @@ def prepare_paid_hotspot_session(db, payment_session: PaymentSession, package: P
         password,
         package.router_profile,
         package.validity_minutes,
-        enabled=False,
+        enabled=True,
     )
     user = (
         db.query(HotspotUser)
@@ -262,7 +262,7 @@ def prepare_paid_hotspot_session(db, payment_session: PaymentSession, package: P
             expires_at=None,
             router_id=payment_session.router_id,
             package_id=package.id,
-            is_active=False,
+            is_active=True,
         )
         db.add(user)
     else:
@@ -270,7 +270,7 @@ def prepare_paid_hotspot_session(db, payment_session: PaymentSession, package: P
         user.amount = payment_session.amount
         user.password_encrypted = encrypt_secret(password)
         user.package_id = package.id
-        user.is_active = False
+        user.is_active = True
         user.expires_at = None
     db.flush()
     return str(user.id), password
@@ -300,7 +300,7 @@ def cleanup_prepared_hotspot_session(db, payment_session: PaymentSession) -> boo
 
 
 def cleanup_failed_prepared_hotspot_sessions(limit: int = 200) -> dict:
-    """Best-effort cleanup for failed/expired payments that prepared disabled access."""
+    """Best-effort cleanup for failed/expired payments that prepared unused access."""
     discovery_db = SessionLocal()
     try:
         public_ids = [
@@ -339,7 +339,7 @@ def cleanup_failed_prepared_hotspot_sessions(limit: int = 200) -> dict:
 
 
 def provision_paid_session(db, payment_session: PaymentSession, package: Package) -> tuple[str, str]:
-    """Finalize paid access idempotently; prepared HotSpot users are enabled only after payment."""
+    """Finalize paid access without touching an already-active prepared HotSpot user."""
     now = datetime.utcnow()
 
     if package.service_type == "hotspot":
@@ -349,15 +349,15 @@ def provision_paid_session(db, payment_session: PaymentSession, package: Package
             .filter(HotspotUser.router_id == payment_session.router_id, HotspotUser.otp == username)
             .first()
         )
-        provision_hotspot_access(
-            payment_session.router_id,
-            username,
-            password,
-            package.router_profile,
-            package.validity_minutes,
-            enabled=True,
-        )
         if user is None:
+            provision_hotspot_access(
+                payment_session.router_id,
+                username,
+                password,
+                package.router_profile,
+                package.validity_minutes,
+                enabled=True,
+            )
             user = HotspotUser(
                 phone_number=payment_session.phone_number,
                 amount=payment_session.amount,
@@ -369,6 +369,16 @@ def provision_paid_session(db, payment_session: PaymentSession, package: Package
             )
             db.add(user)
             db.flush()
+        elif not user.is_active:
+            # Compatibility rescue for sessions created while PR #39 prepared users disabled.
+            provision_hotspot_access(
+                payment_session.router_id,
+                username,
+                password,
+                package.router_profile,
+                package.validity_minutes,
+                enabled=True,
+            )
         user.phone_number = payment_session.phone_number
         user.amount = payment_session.amount
         user.password_encrypted = encrypt_secret(password)
