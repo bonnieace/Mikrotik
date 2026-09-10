@@ -17,6 +17,7 @@ from settings import Settings, get_settings
 
 
 PROVIDER_TIMEOUT = httpx.Timeout(12.0, connect=5.0)
+MPESA_QUERY_PENDING_CODE = "500.001.1001"
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,36 @@ def _mpesa_query_payload(settings: Settings, checkout_request_id: str, timestamp
     }
 
 
+def _mpesa_query_response(response: httpx.Response) -> dict:
+    """Normalize Daraja STK query responses while preserving an in-flight payment as pending."""
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="M-Pesa returned an invalid verification response") from exc
+
+    code = str(data.get("errorCode") or data.get("ResultCode") or "")
+    description = str(data.get("errorMessage") or data.get("ResultDesc") or "")
+    normalized_description = description.lower()
+    is_pending = (
+        code == MPESA_QUERY_PENDING_CODE
+        or "transaction is being processed" in normalized_description
+        or "transaction is still being processed" in normalized_description
+        or "transaction is under processing" in normalized_description
+    )
+    if is_pending:
+        # Do not expose a ResultCode here: payment_service interprets the absence of a
+        # terminal result as "keep polling" and will ask Daraja again on the next window.
+        return {
+            "pending": True,
+            "errorCode": code or MPESA_QUERY_PENDING_CODE,
+            "errorMessage": description or "The transaction is being processed",
+        }
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="M-Pesa verification is unavailable")
+    return data
+
+
 async def initiate_mpesa(phone: str, amount: Decimal, public_id: str) -> ProviderInitiation:
     settings = get_settings()
     if amount != amount.to_integral_value():
@@ -122,9 +153,7 @@ async def query_mpesa(checkout_request_id: str) -> dict:
             headers={"Authorization": f"Bearer {token}"},
             json=_mpesa_query_payload(settings, checkout_request_id, timestamp),
         )
-    if response.status_code != 200:
-        raise HTTPException(status_code=502, detail="M-Pesa verification is unavailable")
-    return response.json()
+    return _mpesa_query_response(response)
 
 
 def query_mpesa_sync(checkout_request_id: str) -> dict:
@@ -138,9 +167,7 @@ def query_mpesa_sync(checkout_request_id: str) -> dict:
             headers={"Authorization": f"Bearer {token}"},
             json=_mpesa_query_payload(settings, checkout_request_id, timestamp),
         )
-    if response.status_code != 200:
-        raise HTTPException(status_code=502, detail="M-Pesa verification is unavailable")
-    return response.json()
+    return _mpesa_query_response(response)
 
 
 async def _kopokopo_token(client: httpx.AsyncClient, settings: Settings) -> str:

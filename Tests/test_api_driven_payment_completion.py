@@ -63,7 +63,7 @@ def _pending_session(db, router, package):
     return row, token
 
 
-def test_hotspot_user_is_prepared_disabled_without_releasing_credentials(db, monkeypatch):
+def test_hotspot_user_is_prepared_active_without_releasing_credentials(db, monkeypatch):
     router, package = _portal(db)
     session, _token = _pending_session(db, router, package)
     router_calls = []
@@ -79,9 +79,9 @@ def test_hotspot_user_is_prepared_disabled_without_releasing_credentials(db, mon
     prepared = db.query(HotspotUser).filter_by(id=int(user_id)).one()
     assert prepared.otp == session.access_username
     assert prepared.expires_at is None
-    assert prepared.is_active is False
+    assert prepared.is_active is True
     assert len(router_calls) == 1
-    assert router_calls[0][1]["enabled"] is False
+    assert router_calls[0][1]["enabled"] is True
     assert "credentials" not in payment_service._public_response(session)
 
     finalized_user_id, finalized_password = provision_paid_session(db, session, package)
@@ -92,8 +92,8 @@ def test_hotspot_user_is_prepared_disabled_without_releasing_credentials(db, mon
     assert finalized_password == password
     assert prepared.expires_at is not None
     assert prepared.is_active is True
-    assert len(router_calls) == 2
-    assert router_calls[1][1]["enabled"] is True
+    # Payment confirmation must not perform a second RouterOS mutation.
+    assert len(router_calls) == 1
 
 
 def test_public_status_query_confirms_payment_and_releases_prepared_credentials(db, monkeypatch):
@@ -129,10 +129,34 @@ def test_public_status_query_confirms_payment_and_releases_prepared_credentials(
     assert result["status"] == "provisioned"
     assert result["credentials"]["username"] == session.access_username
     assert result["credentials"]["password"] == password
-    assert len(router_calls) == 2
-    assert router_calls[0][1]["enabled"] is False
-    assert router_calls[1][1]["enabled"] is True
+    assert len(router_calls) == 1
     assert db.query(Payment).filter_by(invoice=session.public_id).count() == 1
+
+
+def test_inflight_mpesa_query_keeps_polling_and_hides_credentials(db, monkeypatch):
+    router, package = _portal(db)
+    session, token = _pending_session(db, router, package)
+
+    monkeypatch.setattr(access_service, "provision_hotspot_access", lambda *_args, **_kwargs: None)
+    prepare_paid_hotspot_session(db, session, package)
+    db.commit()
+    session.updated_at = datetime.utcnow() - timedelta(seconds=10)
+    db.commit()
+
+    monkeypatch.setattr(
+        payment_service,
+        "query_mpesa_sync",
+        lambda _request_id: {
+            "pending": True,
+            "errorCode": "500.001.1001",
+            "errorMessage": "The transaction is being processed",
+        },
+    )
+
+    result = get_public_payment(session.public_id, token)
+
+    assert result["status"] == "pending"
+    assert "credentials" not in result
 
 
 def test_failed_payment_never_releases_prepared_credentials(db, monkeypatch):
@@ -160,6 +184,38 @@ def test_failed_payment_never_releases_prepared_credentials(db, monkeypatch):
     assert result["status"] == "failed"
     assert "credentials" not in result
     prepared = db.query(HotspotUser).filter_by(otp=session.access_username).one()
-    assert prepared.is_active is False
+    assert prepared.is_active is True
     assert prepared.expires_at is None
-    assert calls[0][1]["enabled"] is False
+    assert calls[0][1]["enabled"] is True
+
+
+def test_legacy_disabled_prepared_user_is_enabled_once_after_confirmed_payment(db, monkeypatch):
+    router, package = _portal(db)
+    session, _token = _pending_session(db, router, package)
+    calls = []
+
+    monkeypatch.setattr(access_service, "provision_hotspot_access", lambda *args, **kwargs: calls.append((args, kwargs)))
+    username, password = access_service._payment_credentials(db, session, package)
+    legacy = HotspotUser(
+        phone_number=session.phone_number,
+        amount=session.amount,
+        otp=username,
+        password_encrypted=access_service.encrypt_secret(password),
+        expires_at=None,
+        router_id=router.id,
+        package_id=package.id,
+        is_active=False,
+    )
+    db.add(legacy)
+    db.commit()
+
+    user_id, returned_password = provision_paid_session(db, session, package)
+    db.commit()
+
+    db.refresh(legacy)
+    assert user_id == str(legacy.id)
+    assert returned_password == password
+    assert legacy.is_active is True
+    assert legacy.expires_at is not None
+    assert len(calls) == 1
+    assert calls[0][1]["enabled"] is True
