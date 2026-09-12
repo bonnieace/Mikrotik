@@ -81,6 +81,48 @@ def _portal_identity(router: Router) -> str | None:
     return router.owner.username if router.owner else None
 
 
+def _portal_redirect_html(redirect_url: str) -> str:
+    """Return a self-contained transition page safe for a captive client.
+
+    The page cannot depend on remote fonts, scripts, or animation assets because the
+    client has not authenticated with the HotSpot yet. The immediate meta redirect is
+    retained while the visible UI gives slow captive browsers an honest loading state
+    and a manual escape hatch.
+    """
+    escaped_url = redirect_url.replace("&", "&amp;")
+    return (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta http-equiv="cache-control" content="no-store">'
+        f'<meta http-equiv="refresh" content="0;url={escaped_url}">'
+        '<title>Connecting to Uzanet</title><style>'
+        '*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;'
+        'padding:24px;background:linear-gradient(145deg,#eef5ff,#f8fbff 55%,#edf9fb);'
+        'color:#0b1c30;font-family:Arial,sans-serif}.card{width:min(100%,380px);padding:36px 28px;'
+        'border:1px solid #dce9ff;border-radius:24px;background:rgba(255,255,255,.96);'
+        'box-shadow:0 24px 64px rgba(15,42,94,.14);text-align:center}.brand{font-size:14px;'
+        'font-weight:700;letter-spacing:.16em;color:#004cca;text-transform:uppercase}.signal{position:relative;'
+        'width:112px;height:96px;margin:22px auto 12px}.signal span{position:absolute;left:50%;bottom:16px;'
+        'border:6px solid #1677ff;border-color:#1677ff transparent transparent transparent;'
+        'border-radius:50%;transform:translateX(-50%) rotate(45deg);animation:pulse 1.6s ease-in-out infinite}'
+        '.signal span:nth-child(1){width:86px;height:86px}.signal span:nth-child(2){width:58px;height:58px;'
+        'animation-delay:.16s}.signal span:nth-child(3){width:30px;height:30px;animation-delay:.32s}'
+        '.signal b{position:absolute;left:50%;bottom:9px;width:12px;height:12px;border-radius:50%;'
+        'background:#004cca;transform:translateX(-50%);box-shadow:0 0 0 8px #e5eeff}h1{margin:0;'
+        'font-size:24px}p{margin:10px 0 24px;color:#56647a;line-height:1.5}.button{display:block;'
+        'width:100%;padding:14px 18px;border-radius:12px;background:#005ce6;color:#fff;text-decoration:none;'
+        'font-weight:700;box-shadow:0 10px 24px rgba(0,76,202,.22)}.hint{margin:14px 0 0;font-size:12px;'
+        'color:#8490a3}@keyframes pulse{0%,100%{opacity:.3;transform:translateX(-50%) rotate(45deg) scale(.92)}'
+        '50%{opacity:1;transform:translateX(-50%) rotate(45deg) scale(1)}}'
+        '@media(prefers-reduced-motion:reduce){.signal span{animation:none}}</style></head><body>'
+        '<main class="card" role="status" aria-live="polite"><div class="brand">Uzanet Wi-Fi</div>'
+        '<div class="signal" aria-hidden="true"><span></span><span></span><span></span><b></b></div>'
+        '<h1>Opening your internet portal</h1><p>Hold on while we load the available packages.</p>'
+        f'<a class="button" href="{escaped_url}">Continue manually</a>'
+        '<p class="hint">Use the button if the portal does not open automatically.</p></main></body></html>'
+    )
+
+
 def _fetch_compatible(command: str, arguments: str = "", variable: str = "uzanetFetch") -> str:
     """Emit a parsed fetch command using syntax shared by RouterOS 6 and 7.
 
@@ -113,14 +155,7 @@ def _build_script(
             f"{portal_url}?link-login-only=$(link-login-only-esc)"
             "&link-orig=$(link-orig-esc)&mac=$(mac-esc)&ip=$(ip-esc)"
         )
-        escaped_url = redirect_url.replace("&", "&amp;")
-        portal_html = (
-            '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            '<meta http-equiv="cache-control" content="no-store">'
-            f'<meta http-equiv="refresh" content="0;url={escaped_url}">'
-            '<title>Connecting to Uzanet</title></head><body>'
-            f'<p><a href="{escaped_url}">Continue</a></p></body></html>'
-        )
+        portal_html = _portal_redirect_html(redirect_url)
 
     values = {
         "backup": _ros_quote(f"uzanet-pre-onboard-{router.uid.split('-')[0]}"),
