@@ -32,6 +32,10 @@ def test_hotspot_redirect_uses_routeros6_file_syntax(db, monkeypatch):
     assert "ip-esc" in script
     assert "login-pre-uzanet" in script
     assert "/file set $loginId contents=" in executable
+    assert "Opening your internet portal" in script
+    assert "Continue manually" in script
+    assert "prefers-reduced-motion" in script
+    assert "cdnjs" not in script
 
     # hAP lite / RouterOS 6.49.17 does not expose /file copy. Check executable
     # RouterOS lines rather than comments so this catches a real command regression.
