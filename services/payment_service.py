@@ -25,11 +25,18 @@ from security import (
     private_hash,
 )
 from services.access_service import prepare_paid_hotspot_session, provision_paid_session
-from services.payment_providers import initiate_provider, normalize_kenyan_phone, query_mpesa, query_mpesa_sync
+from services.payment_providers import (
+    initiate_provider,
+    normalize_kenyan_phone,
+    query_mpesa,
+    query_mpesa_sync,
+)
 from settings import get_settings
 
 
-FINAL_STATUSES = {"provisioned", "failed", "manual_review"}
+# A provider can deliver a verified successful callback after local expiry or an
+# earlier non-success callback. ``failed`` is therefore recoverable, not final.
+CALLBACK_IGNORED_STATUSES = {"provisioned", "manual_review"}
 MPESA_STATUS_QUERY_SECONDS = 5
 
 
@@ -38,6 +45,14 @@ def _decimal_or_none(value) -> Decimal | None:
         return Decimal(str(value))
     except (TypeError, ValueError, ArithmeticError):
         return None
+
+
+def _query_result_code(result: dict) -> str:
+    result_code = result.get("ResultCode")
+    if result_code is not None:
+        return str(result_code)
+    error_code = result.get("errorCode")
+    return "" if error_code is None else str(error_code)
 
 
 def _utc_datetime(value: datetime | None) -> datetime | None:
@@ -273,14 +288,13 @@ async def create_public_payment(
         update_db.close()
 
 
-def _mark_provider_query_failure(public_id: str, code: str, description: str | None) -> None:
+def _record_provider_query_state(public_id: str, code: str, description: str | None) -> None:
     db = SessionLocal()
     try:
         row = crud.get_payment_session_by_public_id(db, public_id)
         if row and row.status == "pending":
-            row.status = "failed"
             row.result_code = code[:32]
-            row.result_description = str(description or "Payment failed")[:255]
+            row.result_description = str(description or "Payment confirmation is pending")[:255]
             db.commit()
     finally:
         db.close()
@@ -292,7 +306,7 @@ def _query_pending_mpesa(public_id: str, request_id: str) -> None:
     except Exception:
         return
 
-    code = str(result.get("ResultCode", ""))
+    code = _query_result_code(result)
     if code == "0":
         try:
             complete_payment(
@@ -304,8 +318,12 @@ def _query_pending_mpesa(public_id: str, request_id: str) -> None:
         except Exception:
             # complete_payment records provisioning_failed before re-raising.
             return
-    elif code:
-        _mark_provider_query_failure(public_id, code, result.get("ResultDesc"))
+    else:
+        _record_provider_query_state(
+            public_id,
+            code,
+            result.get("ResultDesc") or result.get("errorMessage"),
+        )
 
 
 def get_public_payment(public_id: str, status_token: str) -> dict:
@@ -357,7 +375,7 @@ async def process_mpesa_callback(values: dict) -> None:
     db = SessionLocal()
     try:
         row = crud.get_payment_session_by_provider_id(db, request_id)
-        if row is None or row.provider != "mpesa" or row.status in FINAL_STATUSES:
+        if row is None or row.provider != "mpesa" or row.status in CALLBACK_IGNORED_STATUSES:
             return
         if values.get("result_code") != "0":
             row.status = "failed"
@@ -389,7 +407,7 @@ def process_kopokopo_callback(values: dict) -> None:
     db = SessionLocal()
     try:
         row = crud.get_payment_session_by_public_id(db, public_id)
-        if row is None or row.provider != "kopokopo" or row.status in FINAL_STATUSES:
+        if row is None or row.provider != "kopokopo" or row.status in CALLBACK_IGNORED_STATUSES:
             return
         if str(values.get("status", "")).lower() != "success":
             row.status = "failed"
@@ -407,6 +425,8 @@ def process_kopokopo_callback(values: dict) -> None:
 
 
 def complete_payment(public_id: str, receipt: str | None, result_code: str, description: str | None) -> None:
+    if str(result_code) != "0":
+        raise ValueError("complete_payment requires a successful provider result code")
     db = SessionLocal()
     try:
         row = (
@@ -416,11 +436,6 @@ def complete_payment(public_id: str, receipt: str | None, result_code: str, desc
             .first()
         )
         if row is None or row.status == "provisioned":
-            return
-        if row.status == "failed":
-            row.status = "manual_review"
-            row.result_description = "Successful callback arrived after a failed result"
-            db.commit()
             return
         row.status = "provisioning"
         row.provider_receipt = receipt
@@ -531,7 +546,7 @@ async def reconcile_pending_payments(limit: int = 25) -> dict:
         except Exception:
             still_pending += 1
             continue
-        code = str(result.get("ResultCode", ""))
+        code = _query_result_code(result)
         if code == "0":
             await asyncio.to_thread(
                 complete_payment,
@@ -541,15 +556,13 @@ async def reconcile_pending_payments(limit: int = 25) -> dict:
                 result.get("ResultDesc"),
             )
             provisioned += 1
-        elif code:
+        else:
             await asyncio.to_thread(
-                _mark_provider_query_failure,
+                _record_provider_query_state,
                 public_id,
                 code,
-                result.get("ResultDesc"),
+                result.get("ResultDesc") or result.get("errorMessage"),
             )
-            failed += 1
-        else:
             still_pending += 1
     return {"checked": len(candidates), "provisioned": provisioned, "failed": failed, "pending": still_pending}
 
