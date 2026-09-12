@@ -22,11 +22,13 @@ from database.models import AdminUser, Router
 from database.session import SessionLocal
 from schemas import RouterOnboardingRequest
 from security import decrypt_secret, encrypt_secret, hash_token, random_token
+from services.mikrotik_service import refresh_managed_hotspot_login
 from services.vpn_agent_service import provision_l2tp_peer, revoke_l2tp_peer, vpn_agent_enabled
 from settings import get_settings
 
 
 MANAGED_COMMENT = "uzanet-managed"
+PORTAL_TEMPLATE_VERSION = 1
 
 
 def _ros_quote(value: str) -> str:
@@ -81,6 +83,20 @@ def _portal_identity(router: Router) -> str | None:
     return router.owner.username if router.owner else None
 
 
+def _portal_redirect_url(router: Router, isp_identifier: str) -> str:
+    portal_origin = _portal_public_origin()
+    if not portal_origin:
+        return ""
+    portal_url = (
+        f"{portal_origin}/portal/{quote(isp_identifier, safe='')}/"
+        f"{quote(router.portal_slug, safe='')}"
+    )
+    return (
+        f"{portal_url}?link-login-only=$(link-login-only-esc)"
+        "&link-orig=$(link-orig-esc)&mac=$(mac-esc)&ip=$(ip-esc)"
+    )
+
+
 def _portal_redirect_html(redirect_url: str) -> str:
     """Return a self-contained transition page safe for a captive client.
 
@@ -94,6 +110,7 @@ def _portal_redirect_html(redirect_url: str) -> str:
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<meta http-equiv="cache-control" content="no-store">'
+        f'<meta name="uzanet-managed-portal" content="{PORTAL_TEMPLATE_VERSION}">'
         f'<meta http-equiv="refresh" content="0;url={escaped_url}">'
         '<title>Connecting to Uzanet</title><style>'
         '*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;'
@@ -144,18 +161,11 @@ def _build_script(
 ) -> str:
     settings = get_settings()
     isp_identifier = isp_identifier or _portal_identity(router)
-    portal_origin = _portal_public_origin()
     portal_html = ""
-    if portal_origin and isp_identifier and router.portal_enabled:
-        portal_url = (
-            f"{portal_origin}/portal/{quote(isp_identifier, safe='')}/"
-            f"{quote(router.portal_slug, safe='')}"
-        )
-        redirect_url = (
-            f"{portal_url}?link-login-only=$(link-login-only-esc)"
-            "&link-orig=$(link-orig-esc)&mac=$(mac-esc)&ip=$(ip-esc)"
-        )
-        portal_html = _portal_redirect_html(redirect_url)
+    if isp_identifier and router.portal_enabled:
+        redirect_url = _portal_redirect_url(router, isp_identifier)
+        if redirect_url:
+            portal_html = _portal_redirect_html(redirect_url)
 
     values = {
         "backup": _ros_quote(f"uzanet-pre-onboard-{router.uid.split('-')[0]}"),
@@ -465,6 +475,50 @@ def claim_onboarding(token: str, tunnel_ip: str, routeros_version: str | None) -
         return {"status": "claimed", "router_uid": router.uid}
     finally:
         db.close()
+
+
+def refresh_captive_portal(router_id: int) -> dict:
+    """Push the current portal document without rerunning router onboarding."""
+    db = SessionLocal()
+    try:
+        router = crud.get_router_by_id(db, router_id)
+        if router is None or router.onboarding_status == "deleted":
+            raise HTTPException(status_code=404, detail="Router not found")
+        if not router.portal_enabled:
+            raise HTTPException(status_code=409, detail="Enable the customer portal before refreshing it")
+        isp_identifier = _portal_identity(router)
+        if not isp_identifier:
+            raise HTTPException(status_code=409, detail="Router has no ISP portal identity")
+        router_uid = router.uid
+        redirect_url = _portal_redirect_url(router, isp_identifier)
+        if not redirect_url:
+            raise HTTPException(
+                status_code=503,
+                detail="Router onboarding requires an HTTPS API_PUBLIC_URL origin",
+            )
+        html = _portal_redirect_html(redirect_url)
+    finally:
+        db.close()
+
+    result = refresh_managed_hotspot_login(router_id, html, router_uid)
+
+    audit_db = SessionLocal()
+    try:
+        crud.create_log(
+            audit_db,
+            f"Captive portal template v{PORTAL_TEMPLATE_VERSION} refreshed",
+            router_id=router_id,
+            event_type="router.portal.refreshed",
+        )
+        audit_db.commit()
+    finally:
+        audit_db.close()
+    return {
+        "status": "refreshed",
+        "router_uid": router_uid,
+        "template_version": PORTAL_TEMPLATE_VERSION,
+        **result,
+    }
 
 
 def serialize_router(router: Router) -> dict:
