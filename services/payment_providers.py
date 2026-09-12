@@ -17,7 +17,10 @@ from settings import Settings, get_settings
 
 
 PROVIDER_TIMEOUT = httpx.Timeout(12.0, connect=5.0)
-MPESA_QUERY_PENDING_CODE = "500.001.1001"
+MPESA_QUERY_STATUS_KEY = "_query_status"
+MPESA_QUERY_SUCCEEDED = "succeeded"
+MPESA_QUERY_PENDING = "pending"
+MPESA_QUERY_RETRYABLE_ERROR = "retryable_error"
 
 
 @dataclass(frozen=True)
@@ -79,34 +82,34 @@ def _mpesa_query_payload(settings: Settings, checkout_request_id: str, timestamp
     }
 
 
+def _response_code(data: dict, key: str) -> str:
+    value = data.get(key)
+    return "" if value is None else str(value)
+
+
 def _mpesa_query_response(response: httpx.Response) -> dict:
-    """Normalize Daraja STK query responses while preserving an in-flight payment as pending."""
+    """Classify a Daraja STK query without treating text as a payment outcome.
+
+    A status query is authoritative only when its ``ResultCode`` is zero. Non-zero
+    query results and provider ``errorCode`` responses are kept non-terminal so the
+    callback can deliver the actual transaction outcome.
+    """
     try:
         data = response.json()
     except ValueError as exc:
         raise HTTPException(status_code=502, detail="M-Pesa returned an invalid verification response") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="M-Pesa returned an invalid verification response")
 
-    code = str(data.get("errorCode") or data.get("ResultCode") or "")
-    description = str(data.get("errorMessage") or data.get("ResultDesc") or "")
-    normalized_description = description.lower()
-    is_pending = (
-        code == MPESA_QUERY_PENDING_CODE
-        or "transaction is being processed" in normalized_description
-        or "transaction is still being processed" in normalized_description
-        or "transaction is under processing" in normalized_description
-    )
-    if is_pending:
-        # Do not expose a ResultCode here: payment_service interprets the absence of a
-        # terminal result as "keep polling" and will ask Daraja again on the next window.
-        return {
-            "pending": True,
-            "errorCode": code or MPESA_QUERY_PENDING_CODE,
-            "errorMessage": description or "The transaction is being processed",
-        }
-
-    if response.status_code != 200:
-        raise HTTPException(status_code=502, detail="M-Pesa verification is unavailable")
-    return data
+    result_code = _response_code(data, "ResultCode")
+    error_code = _response_code(data, "errorCode")
+    if response.status_code == 200 and result_code == "0":
+        return data | {MPESA_QUERY_STATUS_KEY: MPESA_QUERY_SUCCEEDED}
+    if error_code:
+        return data | {MPESA_QUERY_STATUS_KEY: MPESA_QUERY_RETRYABLE_ERROR}
+    if result_code:
+        return data | {MPESA_QUERY_STATUS_KEY: MPESA_QUERY_PENDING}
+    raise HTTPException(status_code=502, detail="M-Pesa returned an invalid verification response")
 
 
 async def initiate_mpesa(phone: str, amount: Decimal, public_id: str) -> ProviderInitiation:

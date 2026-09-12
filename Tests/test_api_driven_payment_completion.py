@@ -7,6 +7,7 @@ from database.models import AdminUser, HotspotUser, Package, Payment, PaymentSes
 from security import hash_token, payment_access_token
 from services import access_service, payment_service
 from services.access_service import prepare_paid_hotspot_session, provision_paid_session
+from services.payment_providers import MPESA_QUERY_PENDING, MPESA_QUERY_STATUS_KEY
 from services.payment_service import get_public_payment
 
 
@@ -147,9 +148,9 @@ def test_inflight_mpesa_query_keeps_polling_and_hides_credentials(db, monkeypatc
         payment_service,
         "query_mpesa_sync",
         lambda _request_id: {
-            "pending": True,
+            MPESA_QUERY_STATUS_KEY: MPESA_QUERY_PENDING,
             "errorCode": "500.001.1001",
-            "errorMessage": "The transaction is being processed",
+            "errorMessage": "Provider wording is diagnostic only",
         },
     )
 
@@ -159,7 +160,7 @@ def test_inflight_mpesa_query_keeps_polling_and_hides_credentials(db, monkeypatc
     assert "credentials" not in result
 
 
-def test_failed_payment_never_releases_prepared_credentials(db, monkeypatch):
+def test_nonzero_query_result_waits_for_callback_and_keeps_prepared_access(db, monkeypatch):
     router, package = _portal(db)
     session, token = _pending_session(db, router, package)
     calls = []
@@ -176,12 +177,16 @@ def test_failed_payment_never_releases_prepared_credentials(db, monkeypatch):
     monkeypatch.setattr(
         payment_service,
         "query_mpesa_sync",
-        lambda _request_id: {"ResultCode": "1032", "ResultDesc": "Request cancelled by user"},
+        lambda _request_id: {
+            MPESA_QUERY_STATUS_KEY: MPESA_QUERY_PENDING,
+            "ResultCode": "1032",
+            "ResultDesc": "Provider wording is diagnostic only",
+        },
     )
 
     result = get_public_payment(session.public_id, token)
 
-    assert result["status"] == "failed"
+    assert result["status"] == "pending"
     assert "credentials" not in result
     prepared = db.query(HotspotUser).filter_by(otp=session.access_username).one()
     assert prepared.is_active is True
