@@ -1,13 +1,20 @@
 import pytest
 from fastapi import HTTPException
 
-from services.mikrotik_service import _monitor_traffic_once, _traffic_interface, _upsert_router_user, routeros_duration
+from services.mikrotik_service import (
+    _monitor_traffic_once,
+    _refresh_managed_hotspot_login,
+    _traffic_interface,
+    _upsert_router_user,
+    routeros_duration,
+)
 
 
 class FakeResource:
     def __init__(self, rows=()):
         self.rows = list(rows)
         self.updated = None
+        self.updates = []
         self.added = None
         self.called = None
 
@@ -20,6 +27,7 @@ class FakeResource:
 
     def update(self, **values):
         self.updated = values
+        self.updates.append(values)
 
     def add(self, **values):
         self.added = values
@@ -33,6 +41,14 @@ class FakeApi:
     def path(self, *parts):
         assert parts == ("interface",)
         return self.interface_resource
+
+
+class FakeRouterApi:
+    def __init__(self, resources):
+        self.resources = resources
+
+    def path(self, *parts):
+        return self.resources[parts]
 
 
 def test_routeros_upsert_uses_installed_client_shape():
@@ -117,3 +133,80 @@ def test_monitor_traffic_uses_once_as_argument_not_subcommand():
         'monitor-traffic',
         {'interface': 'br-lan', 'once': ''},
     )
+
+
+def _portal_api(files, *, servers=None, profiles=None):
+    file_resource = FakeResource(files)
+    return FakeRouterApi({
+        ("ip", "hotspot"): FakeResource(servers or [{"profile": "default", "disabled": "no"}]),
+        ("ip", "hotspot", "profile"): FakeResource(
+            profiles or [{"name": "default", "html-directory": "hotspot"}]
+        ),
+        ("file",): file_resource,
+    }), file_resource
+
+
+def test_portal_refresh_updates_only_backup_proven_login_page():
+    api, files = _portal_api([
+        {".id": "*1", "name": "hotspot/login.html", "contents": "original"},
+        {".id": "*2", "name": "hotspot/login-pre-uzanet.txt", "contents": "backup"},
+        {".id": "*3", "name": "hotspot/status.html", "contents": "status"},
+    ])
+
+    result = _refresh_managed_hotspot_login(api, "new portal", "12345678-abcd")
+
+    assert result == {"files_updated": 1, "profiles_updated": 1}
+    assert files.updates == [{".id": "*1", "contents": "new portal"}]
+
+
+def test_portal_refresh_recognizes_legacy_managed_directory():
+    managed_dir = "hotspot-uzanet-12345678"
+    api, files = _portal_api(
+        [{".id": "*7", "name": f"{managed_dir}/login.html", "contents": "legacy"}],
+        profiles=[{
+            "name": "default",
+            "html-directory": "hotspot",
+            "html-directory-override": managed_dir,
+        }],
+    )
+
+    _refresh_managed_hotspot_login(api, "new portal", "12345678-abcd")
+
+    assert files.updates == [{".id": "*7", "contents": "new portal"}]
+
+
+def test_portal_refresh_recognizes_embedded_ownership_marker():
+    api, files = _portal_api([
+        {".id": "*9", "name": "hotspot/login.html", "contents": '<meta name="uzanet-managed-portal">'},
+    ])
+
+    _refresh_managed_hotspot_login(api, "new portal", "12345678-abcd")
+
+    assert files.updates == [{".id": "*9", "contents": "new portal"}]
+
+
+def test_portal_refresh_rejects_unrelated_custom_login_page():
+    api, files = _portal_api([
+        {".id": "*1", "name": "hotspot/login.html", "contents": "custom ISP portal"},
+    ])
+
+    with pytest.raises(HTTPException) as exc:
+        _refresh_managed_hotspot_login(api, "new portal", "12345678-abcd")
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "No Uzanet-managed HotSpot login page was found"
+    assert files.updates == []
+
+
+def test_portal_refresh_requires_enabled_hotspot_server():
+    api, files = _portal_api(
+        [{".id": "*1", "name": "hotspot/login.html", "contents": "uzanet-managed-portal"}],
+        servers=[{"profile": "default", "disabled": "yes"}],
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        _refresh_managed_hotspot_login(api, "new portal", "12345678-abcd")
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "Router has no enabled HotSpot server"
+    assert files.updates == []
