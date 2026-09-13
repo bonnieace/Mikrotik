@@ -55,7 +55,12 @@ from services.access_service import (
 from services.active_users_service import get_hotspot_active_users, get_ppp_active_users
 from services.maintenance_service import expire_access
 from services.mikrotik_service import fetch_rt_rx_tx_data
-from services.onboarding_service import claim_onboarding, create_onboarding, consume_onboarding_script
+from services.onboarding_service import (
+    claim_onboarding,
+    consume_onboarding_script,
+    create_onboarding,
+    refresh_captive_portal,
+)
 from services.package_service import create_package, list_packages, retire_package, update_package
 from services.payment_providers import (
     kopokopo_callback_values,
@@ -382,6 +387,12 @@ async def routers_status(current_user: AdminUser = Depends(get_current_user)):
 @app.get("/api/v1/routers/{router_uid}/status")
 async def one_router_status(router_uid: str, current_user: AdminUser = Depends(get_current_user)):
     return await _router_call(check_router, router_uid, current_user)
+
+
+@app.post("/api/v1/routers/{router_uid}/portal/refresh")
+async def refresh_router_portal(router_uid: str, current_user: AdminUser = Depends(get_current_user)):
+    router = get_router_for_user(router_uid, current_user)
+    return await _router_call(refresh_captive_portal, router.id)
 
 
 @app.post("/api/v1/routers/onboarding", status_code=201)

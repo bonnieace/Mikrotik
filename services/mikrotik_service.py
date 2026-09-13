@@ -250,6 +250,66 @@ def delete_hotspot_access(router_id: int, username: str) -> None:
             active.remove(row[".id"])
 
 
+def _routeros_disabled(value) -> bool:
+    return str(value or "no").strip().lower() in {"true", "yes", "1"}
+
+
+def _refresh_managed_hotspot_login(api, html: str, router_uid: str) -> dict:
+    """Replace only Uzanet-owned HotSpot login files.
+
+    Current onboarding leaves ``login-pre-uzanet.txt`` beside the managed page.
+    Older onboarding used a router-specific ``-uzanet-<uid>`` directory instead.
+    The document marker covers refreshes created by this implementation. Checking all
+    three lets existing managed routers upgrade without allowing this action to replace
+    an unrelated custom captive portal.
+    """
+    servers = [row for row in api.path("ip", "hotspot") if not _routeros_disabled(row.get("disabled"))]
+    if not servers:
+        raise HTTPException(status_code=409, detail="Router has no enabled HotSpot server")
+
+    profiles = {str(row.get("name")): row for row in api.path("ip", "hotspot", "profile") if row.get("name")}
+    files_resource = api.path("file")
+    files = list(files_resource)
+    files_by_name = {str(row.get("name")): row for row in files if row.get("name")}
+    legacy_suffix = f"-uzanet-{router_uid.split('-')[0]}"
+    targets: dict[str, str] = {}
+
+    for server in servers:
+        profile = profiles.get(str(server.get("profile") or ""))
+        if not profile:
+            continue
+        base_dir = str(profile.get("html-directory") or "hotspot").rstrip("/")
+        override_dir = str(profile.get("html-directory-override") or "").rstrip("/")
+        source_dir = override_dir or base_dir
+        login_path = f"{source_dir}/login.html"
+        login = files_by_name.get(login_path)
+        if not login or not login.get(".id"):
+            continue
+        backup_exists = f"{source_dir}/login-pre-uzanet.txt" in files_by_name
+        legacy_managed_dir = legacy_suffix in source_dir
+        marked_document = "uzanet-managed-portal" in str(login.get("contents") or "")
+        if backup_exists or legacy_managed_dir or marked_document:
+            targets[str(login[".id"])] = login_path
+
+    if not targets:
+        raise HTTPException(
+            status_code=409,
+            detail="No Uzanet-managed HotSpot login page was found",
+        )
+
+    try:
+        for file_id in targets:
+            files_resource.update(**{".id": file_id, "contents": html})
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Router rejected captive portal refresh") from exc
+    return {"files_updated": len(targets), "profiles_updated": len(targets)}
+
+
+def refresh_managed_hotspot_login(router_id: int, html: str, router_uid: str) -> dict:
+    with router_api(router_id) as api:
+        return _refresh_managed_hotspot_login(api, html, router_uid)
+
+
 def provision_pppoe_access(
     router_id: int,
     username: str,
