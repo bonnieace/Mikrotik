@@ -27,9 +27,10 @@ def _remove_route(path: str, method: str) -> None:
     ]
 
 
-# Replace the earlier self-registration endpoint and versioned login with the verified flow.
+# Replace the earlier self-registration/login/profile routes with the verified flow.
 _remove_route("/api/v1/auth/register", "POST")
 _remove_route("/api/v1/auth/token", "POST")
+_remove_route("/api/v1/me", "GET")
 _remove_route("/token", "POST")
 app.include_router(registration_router)
 
@@ -37,6 +38,17 @@ app.include_router(registration_router)
 @app.post("/token", include_in_schema=False)
 async def legacy_login(form_data: OAuth2PasswordRequestForm = Depends()):
     return await verified_login(form_data)
+
+
+@app.get("/api/v1/me")
+async def me(current_user=Depends(mono.get_current_user)):
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "isp_name": current_user.isp_name,
+        "email": current_user.email,
+        "role": current_user.role,
+    }
 
 
 __all__ = ["app", "pwd_context"]
