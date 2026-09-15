@@ -20,7 +20,12 @@ class AdminUser(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(125), unique=True, nullable=False)
+    isp_name = Column(String(125), nullable=True)
     email = Column(String(255), unique=True, nullable=True)
+    email_verified_at = Column(DateTime, nullable=True)
+    email_verification_token_hash = Column(String(64), nullable=True, index=True)
+    email_verification_expires_at = Column(DateTime, nullable=True)
+    email_verification_sent_at = Column(DateTime, nullable=True)
     hashed_password = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, default="isp")
     is_active = Column(Boolean, nullable=False, default=True)
