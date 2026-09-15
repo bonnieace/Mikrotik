@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from database.models import AdminUser
-from mono import app, pwd_context
+from main import app, pwd_context
 from security import decrypt_secret, encrypt_secret, is_encrypted
 from settings import get_settings
 
@@ -30,89 +30,133 @@ def test_production_rejects_unsafe_configuration(monkeypatch):
         get_settings()
 
 
-def test_public_isp_registration_creates_session_ready_account(db):
+def _capture_verification(monkeypatch):
+    sent: dict[str, str] = {}
+
+    async def fake_send(email: str, isp_name: str, token: str):
+        sent.update(email=email, isp_name=isp_name, token=token)
+
+    monkeypatch.setattr("services.registration_service.send_verification_email", fake_send)
+    return sent
+
+
+def test_public_isp_registration_generates_identifier_and_requires_verification(db, monkeypatch):
+    sent = _capture_verification(monkeypatch)
     with TestClient(app) as client:
         registration = client.post(
             "/api/v1/auth/register",
             json={
-                "username": "New-Isp",
+                "isp_name": "New ISP Network",
                 "email": "OWNER@EXAMPLE.COM",
                 "password": "a-long-test-password",
             },
         )
         assert registration.status_code == 201
-        payload = registration.json()
-        assert payload["token_type"] == "bearer"
-        assert payload["access_token"]
-        assert payload["expires_in"] > 0
+        assert registration.json() == {"status": "verification_required", "email": "owner@example.com"}
 
-        headers = {"Authorization": f"Bearer {payload['access_token']}"}
-        me = client.get("/api/v1/me", headers=headers)
+        user = db.query(AdminUser).filter(AdminUser.email == "owner@example.com").one()
+        assert user.username.startswith("newispnetwork-")
+        assert " " not in user.username
+        assert user.username == user.username.lower()
+        assert user.isp_name == "New ISP Network"
+        assert user.is_active is False
+        assert user.email_verified_at is None
+        assert sent["email"] == "owner@example.com"
+        assert sent["isp_name"] == "New ISP Network"
+        assert sent["token"]
+
+        pending_login = client.post(
+            "/api/v1/auth/token",
+            data={"username": "owner@example.com", "password": "a-long-test-password"},
+        )
+        assert pending_login.status_code == 403
+        assert "Verify your email" in pending_login.json()["detail"]
+
+        verification = client.post("/api/v1/auth/verify-email", json={"token": sent["token"]})
+        assert verification.status_code == 200
+        token = verification.json()["access_token"]
+        me = client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
         assert me.status_code == 200
-        assert me.json() == {
-            "id": me.json()["id"],
-            "username": "new-isp",
-            "email": "owner@example.com",
-            "role": "isp",
-        }
+        assert me.json()["username"].startswith("newispnetwork-")
+        assert me.json()["email"] == "owner@example.com"
+        assert me.json()["role"] == "isp"
 
-    user = db.query(AdminUser).filter(AdminUser.username == "new-isp").one()
+    db.refresh(user)
     assert user.is_active is True
-    assert user.role == "isp"
+    assert user.email_verified_at is not None
+    assert user.email_verification_token_hash is None
     assert pwd_context.verify("a-long-test-password", user.hashed_password)
 
 
-def test_public_isp_registration_rejects_duplicate_identifier_or_email(db):
+def test_public_isp_registration_rejects_duplicate_email(db, monkeypatch):
+    _capture_verification(monkeypatch)
     with TestClient(app) as client:
         first = client.post(
             "/api/v1/auth/register",
             json={
-                "username": "first-isp",
+                "isp_name": "First ISP",
                 "email": "first@example.com",
                 "password": "a-long-test-password",
             },
         )
         assert first.status_code == 201
 
-        duplicate_identifier = client.post(
-            "/api/v1/auth/register",
-            json={
-                "username": "first-isp",
-                "email": "other@example.com",
-                "password": "another-long-password",
-            },
-        )
-        assert duplicate_identifier.status_code == 409
-
         duplicate_email = client.post(
             "/api/v1/auth/register",
             json={
-                "username": "other-isp",
-                "email": "first@example.com",
+                "isp_name": "Another ISP",
+                "email": "FIRST@example.com",
                 "password": "another-long-password",
             },
         )
         assert duplicate_email.status_code == 409
 
 
-def test_public_isp_registration_cannot_choose_privileged_role(db):
+def test_public_isp_registration_cannot_choose_privileged_role(db, monkeypatch):
+    _capture_verification(monkeypatch)
     with TestClient(app) as client:
         response = client.post(
             "/api/v1/auth/register",
             json={
-                "username": "tenant-isp",
+                "isp_name": "Tenant ISP",
                 "email": "tenant@example.com",
                 "password": "a-long-test-password",
                 "role": "superadmin",
             },
         )
         assert response.status_code == 422
-        assert db.query(AdminUser).filter(AdminUser.username == "tenant-isp").first() is None
+        assert db.query(AdminUser).filter(AdminUser.email == "tenant@example.com").first() is None
+
+
+def test_resend_verification_rotates_token(db, monkeypatch):
+    sent = _capture_verification(monkeypatch)
+    monkeypatch.setenv("EMAIL_VERIFICATION_RESEND_SECONDS", "30")
+    with TestClient(app) as client:
+        assert client.post(
+            "/api/v1/auth/register",
+            json={
+                "isp_name": "Resend ISP",
+                "email": "resend@example.com",
+                "password": "a-long-test-password",
+            },
+        ).status_code == 201
+        first_token = sent["token"]
+        user = db.query(AdminUser).filter(AdminUser.email == "resend@example.com").one()
+        user.email_verification_sent_at = datetime.utcnow() - timedelta(minutes=2)
+        db.commit()
+
+        resend = client.post("/api/v1/auth/resend-verification", json={"email": "resend@example.com"})
+        assert resend.status_code == 202
+        assert sent["token"] != first_token
+        assert client.post("/api/v1/auth/verify-email", json={"token": first_token}).status_code == 400
+        assert client.post("/api/v1/auth/verify-email", json={"token": sent["token"]}).status_code == 200
 
 
 def test_login_me_logout_revokes_token(db):
     user = AdminUser(
         username="operator",
+        email="operator@example.com",
+        email_verified_at=datetime.utcnow(),
         hashed_password=pwd_context.hash("a-long-test-password"),
         role="isp",
     )
@@ -122,7 +166,7 @@ def test_login_me_logout_revokes_token(db):
     with TestClient(app) as client:
         login = client.post(
             "/api/v1/auth/token",
-            data={"username": "operator", "password": "a-long-test-password"},
+            data={"username": "operator@example.com", "password": "a-long-test-password"},
         )
         assert login.status_code == 200
         token = login.json()["access_token"]
