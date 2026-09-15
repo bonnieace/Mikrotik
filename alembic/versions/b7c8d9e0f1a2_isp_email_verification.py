@@ -1,7 +1,7 @@
 """add ISP display name and email verification state
 
 Revision ID: b7c8d9e0f1a2
-Revises: f6a7b8c9d0e1
+Revises: a7b8c9d0e1f2
 Create Date: 2026-09-15
 """
 
@@ -11,7 +11,7 @@ from sqlalchemy import inspect
 
 
 revision = "b7c8d9e0f1a2"
-down_revision = "f6a7b8c9d0e1"
+down_revision = "a7b8c9d0e1f2"
 branch_labels = None
 depends_on = None
 
