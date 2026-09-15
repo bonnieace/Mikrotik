@@ -94,6 +94,10 @@ def get_admin_user_by_username(db: Session, username: str):
     return db.query(AdminUser).filter(AdminUser.username == username).first()
 
 
+def get_admin_user_by_email(db: Session, email: str):
+    return db.query(AdminUser).filter(AdminUser.email == email).first()
+
+
 def get_admin_user_by_id(db: Session, user_id: int):
     return db.query(AdminUser).filter(AdminUser.id == user_id).first()
 
