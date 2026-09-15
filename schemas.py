@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,58}[a-z0-9])?$")
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-RESERVED_ISP_IDENTIFIERS = {"admin", "api", "portal", "superadmin", "uzanet", "www"}
 
 
 class StrictModel(BaseModel):
@@ -19,19 +18,25 @@ class StrictModel(BaseModel):
 
 
 class ISPRegistrationRequest(StrictModel):
-    username: str = Field(min_length=3, max_length=60)
+    isp_name: str = Field(min_length=2, max_length=125)
     email: str = Field(min_length=5, max_length=255)
     password: str = Field(min_length=12, max_length=128)
 
-    @field_validator("username")
+    @field_validator("email")
     @classmethod
-    def valid_username(cls, value: str) -> str:
+    def valid_email(cls, value: str) -> str:
         value = value.lower()
-        if not SLUG_RE.fullmatch(value):
-            raise ValueError("use lowercase letters, numbers, and hyphens")
-        if value in RESERVED_ISP_IDENTIFIERS:
-            raise ValueError("this ISP identifier is reserved")
+        if not EMAIL_RE.fullmatch(value):
+            raise ValueError("enter a valid email address")
         return value
+
+
+class EmailVerificationRequest(StrictModel):
+    token: str = Field(min_length=32, max_length=256)
+
+
+class ResendVerificationRequest(StrictModel):
+    email: str = Field(min_length=5, max_length=255)
 
     @field_validator("email")
     @classmethod
