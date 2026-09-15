@@ -34,6 +34,7 @@ from schemas import (
     ChangePasswordRequest,
     CreateAdminUserRequest,
     HotspotUserCreateRequest,
+    ISPRegistrationRequest,
     PackageCreateRequest,
     PackageUpdateRequest,
     PPPUserCreateRequest,
@@ -222,6 +223,29 @@ def require_superadmin(current_user: AdminUser = Depends(get_current_user)) -> A
     return current_user
 
 
+def _issue_access_token(user: AdminUser) -> dict:
+    now_utc = datetime.now(timezone.utc)
+    encoded = jwt.encode(
+        {
+            "sub": str(user.id),
+            "role": user.role,
+            "ver": user.token_version,
+            "iss": "uzanet-api",
+            "aud": "uzanet-admin",
+            "iat": now_utc,
+            "exp": now_utc + timedelta(minutes=settings.access_token_expire_minutes),
+            "jti": str(uuid.uuid4()),
+        },
+        settings.secret_key,
+        algorithm="HS256",
+    )
+    return {
+        "access_token": encoded,
+        "token_type": "bearer",
+        "expires_in": settings.access_token_expire_minutes * 60,
+    }
+
+
 def _authenticate(form_data: OAuth2PasswordRequestForm) -> dict:
     now = datetime.utcnow()
     db = SessionLocal()
@@ -248,22 +272,7 @@ def _authenticate(form_data: OAuth2PasswordRequestForm) -> dict:
         user.locked_until = None
         user.last_login_at = now
         db.commit()
-        now_utc = datetime.now(timezone.utc)
-        encoded = jwt.encode(
-            {
-                "sub": str(user.id),
-                "role": user.role,
-                "ver": user.token_version,
-                "iss": "uzanet-api",
-                "aud": "uzanet-admin",
-                "iat": now_utc,
-                "exp": now_utc + timedelta(minutes=settings.access_token_expire_minutes),
-                "jti": str(uuid.uuid4()),
-            },
-            settings.secret_key,
-            algorithm="HS256",
-        )
-        return {"access_token": encoded, "token_type": "bearer", "expires_in": settings.access_token_expire_minutes * 60}
+        return _issue_access_token(user)
     finally:
         db.close()
 
@@ -291,6 +300,28 @@ async def health_ready():
         return {"status": "ready"}
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    finally:
+        db.close()
+
+
+@app.post("/api/v1/auth/register", status_code=201)
+async def register_isp(body: ISPRegistrationRequest):
+    db = SessionLocal()
+    try:
+        if crud.get_admin_user_by_username(db, body.username) or crud.get_admin_user_by_email(db, body.email):
+            raise HTTPException(status_code=409, detail="An account with that ISP identifier or email already exists")
+        try:
+            user = crud.create_admin_user(
+                db,
+                username=body.username,
+                hashed_password=pwd_context.hash(body.password),
+                role="isp",
+                email=body.email,
+            )
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(status_code=409, detail="An account with that ISP identifier or email already exists") from exc
+        return _issue_access_token(user)
     finally:
         db.close()
 
