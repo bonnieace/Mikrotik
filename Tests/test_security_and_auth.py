@@ -30,6 +30,86 @@ def test_production_rejects_unsafe_configuration(monkeypatch):
         get_settings()
 
 
+def test_public_isp_registration_creates_session_ready_account(db):
+    with TestClient(app) as client:
+        registration = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "New-Isp",
+                "email": "OWNER@EXAMPLE.COM",
+                "password": "a-long-test-password",
+            },
+        )
+        assert registration.status_code == 201
+        payload = registration.json()
+        assert payload["token_type"] == "bearer"
+        assert payload["access_token"]
+        assert payload["expires_in"] > 0
+
+        headers = {"Authorization": f"Bearer {payload['access_token']}"}
+        me = client.get("/api/v1/me", headers=headers)
+        assert me.status_code == 200
+        assert me.json() == {
+            "id": me.json()["id"],
+            "username": "new-isp",
+            "email": "owner@example.com",
+            "role": "isp",
+        }
+
+    user = db.query(AdminUser).filter(AdminUser.username == "new-isp").one()
+    assert user.is_active is True
+    assert user.role == "isp"
+    assert pwd_context.verify("a-long-test-password", user.hashed_password)
+
+
+def test_public_isp_registration_rejects_duplicate_identifier_or_email(db):
+    with TestClient(app) as client:
+        first = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "first-isp",
+                "email": "first@example.com",
+                "password": "a-long-test-password",
+            },
+        )
+        assert first.status_code == 201
+
+        duplicate_identifier = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "first-isp",
+                "email": "other@example.com",
+                "password": "another-long-password",
+            },
+        )
+        assert duplicate_identifier.status_code == 409
+
+        duplicate_email = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "other-isp",
+                "email": "first@example.com",
+                "password": "another-long-password",
+            },
+        )
+        assert duplicate_email.status_code == 409
+
+
+def test_public_isp_registration_cannot_choose_privileged_role(db):
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/auth/register",
+            json={
+                "username": "tenant-isp",
+                "email": "tenant@example.com",
+                "password": "a-long-test-password",
+                "role": "superadmin",
+            },
+        )
+        assert response.status_code == 422
+        assert db.query(AdminUser).filter(AdminUser.username == "tenant-isp").first() is None
+
+
 def test_login_me_logout_revokes_token(db):
     user = AdminUser(
         username="operator",
